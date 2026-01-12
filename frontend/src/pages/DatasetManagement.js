@@ -53,7 +53,8 @@ const DatasetManagement = () => {
       fetchDatasets();
     } catch (error) {
       console.error('Upload failed:', error);
-      alert('Failed to upload dataset');
+      const errorMessage = error.response?.data?.detail || 'Failed to upload dataset';
+      alert(`Upload Failed:\n${errorMessage}`);
     } finally {
       setUploading(false);
     }

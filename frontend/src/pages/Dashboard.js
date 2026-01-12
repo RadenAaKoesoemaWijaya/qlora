@@ -149,13 +149,23 @@ const Dashboard = () => {
             <div className="text-center py-12">
               <AlertCircle className="h-12 w-12 text-slate-400 mx-auto mb-3" />
               <p className="text-slate-600 mb-4">No training jobs yet</p>
-              <Link
-                to="/training/configure"
+              <button
+                onClick={() => {
+                  const model = localStorage.getItem('selectedModel');
+                  const dataset = localStorage.getItem('selectedDataset');
+                  if (!dataset) {
+                    navigate('/datasets');
+                  } else if (!model) {
+                    navigate('/models');
+                  } else {
+                    navigate('/training/configure');
+                  }
+                }}
                 data-testid="start-training-button"
                 className="inline-flex items-center px-4 py-2 bg-indigo-900 text-white rounded-md hover:bg-indigo-800 transition-colors"
               >
                 Start Your First Training
-              </Link>
+              </button>
             </div>
           ) : (
             <div className="space-y-4">

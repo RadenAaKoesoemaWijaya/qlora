@@ -13,6 +13,18 @@ import asyncio
 import random
 import logging
 
+try:
+    from core.training_engine import QLoRATrainingEngine
+    from core.data_processor import DataProcessor
+    from transformers import AutoTokenizer
+    import torch
+    HAS_ML_LIBS = True
+    HAS_GPU = torch.cuda.is_available()
+except ImportError:
+    HAS_ML_LIBS = False
+    HAS_GPU = False
+    logging.getLogger(__name__).warning("ML libraries not found or incomplete. Running in SIMULATION MODE.")
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -71,6 +83,7 @@ class TrainingConfig(BaseModel):
     target_modules: List[str] = ["q_proj", "v_proj", "k_proj", "o_proj"]
     use_gpu: bool = True
     gradient_accumulation_steps: int = 4
+    use_wandb: bool = False  # Default to False for easier local testing
 
 class TrainingJob(BaseModel):
     id: str
@@ -173,6 +186,9 @@ async def get_available_models():
     return models
 
 # Datasets
+DATASET_DIR = ROOT_DIR / "datasets"
+DATASET_DIR.mkdir(exist_ok=True)
+
 @api_router.post("/datasets/upload")
 async def upload_dataset(
     file: UploadFile = File(...),
@@ -187,17 +203,25 @@ async def upload_dataset(
         filename = file.filename
         file_type = filename.split('.')[-1].upper()
         
+        # Save file to disk
+        dataset_id = str(uuid.uuid4())
+        file_ext = filename.split('.')[-1]
+        save_path = DATASET_DIR / f"{dataset_id}.{file_ext}"
+        
+        with open(save_path, "wb") as f:
+            f.write(content)
+        
         # Parse content to count rows
         rows = 0
+        decoded_content = content.decode()
         if file_type == 'JSON':
-            data = json.loads(content)
+            data = json.loads(decoded_content)
             rows = len(data) if isinstance(data, list) else 1
         elif file_type == 'JSONL':
-            rows = len(content.decode().strip().split('\n'))
+            rows = len(decoded_content.strip().split('\n'))
         elif file_type == 'CSV':
-            rows = len(content.decode().strip().split('\n')) - 1  # Minus header
+            rows = len(decoded_content.strip().split('\n')) - 1  # Minus header
         
-        dataset_id = str(uuid.uuid4())
         dataset = {
             "id": dataset_id,
             "name": name or filename,
@@ -207,11 +231,10 @@ async def upload_dataset(
             "created_at": datetime.now(timezone.utc).isoformat(),
             "status": "uploaded",
             "validation_status": "valid",
-            "content": content.decode() if file_size < 1000000 else "[Large file stored]"
+            "file_path": str(save_path)
         }
         
         await db.datasets.insert_one(dataset)
-        dataset.pop('content', None)  # Don't return full content
         
         return dataset
     except Exception as e:
@@ -264,8 +287,8 @@ async def start_training(config: TrainingConfig):
     
     await db.training_jobs.insert_one(job)
     
-    # Start simulated training in background
-    asyncio.create_task(simulate_training(job_id, config))
+    # Start training in background
+    asyncio.create_task(run_training_job(job_id, config))
     
     return job
 
@@ -364,9 +387,92 @@ async def get_dashboard_stats():
         "total_checkpoints": total_checkpoints
     }
 
-# ============= SIMULATED TRAINING =============
+# ============= TRAINING EXECUTION =============
 
-async def simulate_training(job_id: str, config: TrainingConfig):
+async def run_training_job(job_id: str, config: TrainingConfig):
+    """Main entry point for training job execution"""
+    # Check resources and libraries
+    can_run_real = HAS_ML_LIBS and HAS_GPU and config.use_gpu
+    
+    if can_run_real:
+        logger.info(f"Starting REAL training for job {job_id}")
+        await run_real_training(job_id, config)
+    else:
+        reason = "No GPU available" if not HAS_GPU else "ML libraries missing"
+        if not config.use_gpu: reason = "GPU disabled in config"
+        logger.info(f"Starting SIMULATED training for job {job_id} (Reason: {reason})")
+        await run_simulated_training(job_id, config)
+
+async def run_real_training(job_id: str, config: TrainingConfig):
+    """Execute real QLoRA training"""
+    try:
+        # Update status
+        await db.training_jobs.update_one(
+            {"id": job_id},
+            {"$set": {"status": "initializing"}}
+        )
+
+        # 1. Get dataset info
+        dataset_info = await db.datasets.find_one({"id": config.dataset_id})
+        if not dataset_info:
+            raise ValueError("Dataset not found")
+            
+        file_path = dataset_info.get("file_path")
+        if not file_path or not os.path.exists(file_path):
+            raise FileNotFoundError(f"Dataset file not found at {file_path}")
+
+        # 2. Map Model ID
+        # Mapping simplified for prototype
+        MODEL_MAP = {
+            "llama-2-7b": "meta-llama/Llama-2-7b-hf",
+            "llama-3-8b": "meta-llama/Meta-Llama-3-8B",
+            "mistral-7b": "mistralai/Mistral-7B-v0.3",
+            "gemma-7b": "google/gemma-7b",
+        }
+        real_model_id = MODEL_MAP.get(config.model_id, config.model_id)
+
+        # 3. Process Dataset (Blocking, run in thread)
+        def process_data():
+            tokenizer = AutoTokenizer.from_pretrained(real_model_id, trust_remote_code=True)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+                
+            processor = DataProcessor(tokenizer)
+            
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            if dataset_info['file_type'] == 'JSON':
+                processed = processor.process_json_dataset(content)
+            elif dataset_info['file_type'] == 'JSONL':
+                processed = processor.process_jsonl_dataset(content)
+            elif dataset_info['file_type'] == 'CSV':
+                processed = processor.process_csv_dataset(content)
+            else:
+                raise ValueError(f"Unsupported file type: {dataset_info['file_type']}")
+                
+            return processed['dataset']
+
+        # Run data processing in thread
+        logger.info("Processing dataset...")
+        train_dataset = await asyncio.to_thread(process_data)
+        
+        # 4. Initialize Engine & Train
+        engine = QLoRATrainingEngine(config.dict())
+        
+        # We need to modify start_training to be truly async or run in thread
+        # Since start_training in core is defined async but has blocking calls, 
+        # we will wrap it. Ideally refactor core, but for now:
+        await engine.start_training(job_id, real_model_id, train_dataset, db)
+
+    except Exception as e:
+        logger.error(f"Real training failed: {e}")
+        await db.training_jobs.update_one(
+            {"id": job_id},
+            {"$set": {"status": "failed", "error": str(e)}}
+        )
+
+async def run_simulated_training(job_id: str, config: TrainingConfig):
     """Simulate training process with realistic metrics"""
     try:
         # Update to training status

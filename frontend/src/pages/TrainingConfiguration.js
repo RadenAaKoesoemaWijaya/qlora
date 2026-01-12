@@ -27,9 +27,22 @@ const TrainingConfiguration = () => {
   useEffect(() => {
     const model = JSON.parse(localStorage.getItem('selectedModel') || 'null');
     const dataset = JSON.parse(localStorage.getItem('selectedDataset') || 'null');
+    
+    if (!model) {
+      alert('Please select a model first');
+      navigate('/models');
+      return;
+    }
+    
+    if (!dataset) {
+      alert('Please select a dataset first');
+      navigate('/datasets');
+      return;
+    }
+
     setSelectedModel(model);
     setSelectedDataset(dataset);
-  }, []);
+  }, [navigate]);
 
   const handleConfigChange = (field, value) => {
     setConfig({ ...config, [field]: value });
