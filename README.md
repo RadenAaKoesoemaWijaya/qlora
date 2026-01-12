@@ -170,6 +170,47 @@ Model Evaluation → Result Storage
 
 ## 🚀 Menjalankan Aplikasi
 
+### Option A: Menggunakan Docker (Recommended)
+Solusi terbaik untuk konsistensi di Localhost maupun Cloud Production.
+
+#### 1. Localhost (Development/Testing)
+Jalankan aplikasi di mesin lokal Anda dengan satu perintah.
+
+```bash
+# Build dan jalankan container
+docker-compose up --build
+```
+Akses aplikasi di:
+- **Frontend**: http://localhost:3000
+- **Backend API**: http://localhost:8000/docs
+- **MongoDB**: localhost:27017
+
+#### 2. Cloud Deployment (AWS/GCP/Azure)
+Untuk deployment di server production (VPS/EC2/Compute Engine).
+
+**Langkah-langkah:**
+1. **Persiapan Server**:
+   - Install Docker & Docker Compose.
+   - (Opsional) Install **NVIDIA Container Toolkit** jika ingin menggunakan GPU untuk Real Training.
+
+2. **Konfigurasi Environment**:
+   - Clone repository ini di server.
+   - Edit `docker-compose.yml` untuk mengaktifkan GPU (uncomment bagian `deploy/resources`).
+   - Sesuaikan variable environment jika perlu (misal: domain khusus).
+
+3. **Build & Run**:
+   ```bash
+   # Jalankan di background (detached mode)
+   docker-compose up --build -d
+   ```
+
+**Catatan Penting Cloud**:
+- **GPU Support**: Pastikan driver NVIDIA sudah terinstall di host. Tanpa GPU, sistem akan otomatis fallback ke mode **Simulasi**.
+- **Data Persistence**: Dataset dan Checkpoint otomatis tersimpan di folder `backend/datasets` dan `backend/checkpoints` di host machine (via Docker Volumes).
+- **Public Access**: Pastikan port 3000 (Frontend) dan 8000 (Backend) dibuka di Firewall/Security Group.
+
+### Option B: Manual Installation (Legacy)
+
 ### Mode Development
 ```bash
 # Terminal 1 - Backend
@@ -209,6 +250,7 @@ yarn test
 qlora/
 ├── backend/
 │   ├── server.py          # FastAPI server
+│   ├── Dockerfile         # Docker configuration
 │   ├── requirements.txt   # Python dependencies
 │   └── .env              # Environment variables
 ├── frontend/
@@ -218,8 +260,10 @@ qlora/
 │   │   ├── hooks/        # Custom hooks
 │   │   └── lib/          # Utilities
 │   ├── public/           # Static assets
+│   ├── Dockerfile        # Docker configuration
 │   └── package.json      # Node dependencies
 ├── tests/                # Test files
+├── docker-compose.yml    # Docker services config
 └── README.md            # Documentation
 ```
 
