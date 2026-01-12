@@ -31,6 +31,11 @@ Aplikasi web-based untuk fine-tuning Large Language Models (LLM) menggunakan met
 - Perbandingan performa model
 - History training dan evaluasi
 
+### 6. **Hybrid Training Engine**
+- **Smart Dispatcher**: Otomatis mendeteksi ketersediaan GPU dan library ML.
+- **Real Training**: Menjalankan fine-tuning QLoRA asli menggunakan `bitsandbytes`, `peft`, dan `transformers` jika environment mendukung.
+- **Simulated Fallback**: Otomatis beralih ke mode simulasi jika resource tidak memadai, memungkinkan testing alur kerja di sembarang mesin.
+
 ## 🏗️ Arsitektur Sistem
 
 ### Backend (Python/FastAPI)
@@ -51,6 +56,9 @@ Aplikasi web-based untuk fine-tuning Large Language Models (LLM) menggunakan met
 - Python 3.8+
 - MongoDB 4.4+
 - pip package manager
+- **Untuk Real Training (Optional):**
+  - NVIDIA GPU dengan CUDA support
+  - Library: `torch`, `transformers`, `peft`, `bitsandbytes`, `scipy`
 
 ### Frontend Requirements
 - Node.js 16+
@@ -255,5 +263,4 @@ Untuk pertanyaan dan bantuan:
 - Documentation: [Wiki/Documentation]
 
 ---
-
-**Note**: Aplikasi ini menggunakan simulated training engine untuk demo dan development. Untuk implementasi training asli, integrasi dengan framework seperti Hugging Face Transformers atau PyTorch diperlukan.
+**Note**: Aplikasi ini dilengkapi dengan **Hybrid Engine**. Secara default akan mencoba menjalankan training QLoRA yang sebenarnya. Jika hardware (GPU) atau library pendukung tidak ditemukan, sistem akan otomatis beralih ke mode simulasi untuk keperluan demonstrasi UI/UX.
