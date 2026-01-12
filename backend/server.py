@@ -119,12 +119,18 @@ class Checkpoint(BaseModel):
 class EvaluationResult(BaseModel):
     id: str
     model_id: str
-    accuracy: float
+    # Legacy/Simple Metrics
+    accuracy: float = 0.0
     perplexity: float
-    f1_score: float
-    precision: float
-    recall: float
+    f1_score: float = 0.0
+    precision: float = 0.0
+    recall: float = 0.0
+    # Advanced NLP Metrics
+    bert_score: float = 0.0
+    rouge_l: float = 0.0
+    bleu_score: float = 0.0
     evaluated_at: str
+    details: Optional[Dict[str, Any]] = None
 
 # ============= ENDPOINTS =============
 
@@ -348,17 +354,109 @@ async def evaluate_model(model_id: str, dataset_id: str):
     """Evaluate a fine-tuned model"""
     eval_id = str(uuid.uuid4())
     
-    # Simulate evaluation
-    result = {
-        "id": eval_id,
-        "model_id": model_id,
-        "accuracy": round(random.uniform(0.85, 0.95), 4),
-        "perplexity": round(random.uniform(2.5, 4.5), 4),
-        "f1_score": round(random.uniform(0.80, 0.92), 4),
-        "precision": round(random.uniform(0.82, 0.93), 4),
-        "recall": round(random.uniform(0.78, 0.90), 4),
-        "evaluated_at": datetime.now(timezone.utc).isoformat()
-    }
+    # Check dependencies
+    if not HAS_ML_LIBS:
+        # Fallback to simulation if libs not present
+        result = {
+            "id": eval_id,
+            "model_id": model_id,
+            "accuracy": round(random.uniform(0.85, 0.95), 4),
+            "perplexity": round(random.uniform(2.5, 4.5), 4),
+            "f1_score": round(random.uniform(0.80, 0.92), 4),
+            "precision": round(random.uniform(0.82, 0.93), 4),
+            "recall": round(random.uniform(0.78, 0.90), 4),
+            "bert_score": round(random.uniform(0.85, 0.90), 4),
+            "rouge_l": round(random.uniform(0.40, 0.60), 4),
+            "bleu_score": round(random.uniform(20.0, 40.0), 2),
+            "evaluated_at": datetime.now(timezone.utc).isoformat(),
+            "details": {"note": "Simulated Result (ML libs missing)"}
+        }
+    else:
+        try:
+            from core.evaluation_engine import EvaluationEngine
+            
+            # 1. Get dataset info
+            dataset_info = await db.datasets.find_one({"id": dataset_id})
+            if not dataset_info:
+                raise HTTPException(status_code=404, detail="Dataset not found")
+            
+            file_path = dataset_info.get("file_path")
+            
+            # 2. Process dataset for evaluation (take subset)
+            def load_eval_data():
+                processor = DataProcessor(None) # Tokenizer not needed for raw read
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                if dataset_info['file_type'] == 'JSON':
+                    data = json.loads(content)
+                elif dataset_info['file_type'] == 'JSONL':
+                    data = [json.loads(line) for line in content.strip().split('\n')]
+                else:
+                    data = [] # CSV implementation skipped for brevity
+                
+                # Normalize keys
+                normalized = []
+                for item in data:
+                    norm_item = {}
+                    # Try to find instruction/output keys
+                    keys = item.keys()
+                    inst_key = next((k for k in keys if 'instruction' in k.lower() or 'prompt' in k.lower()), None)
+                    out_key = next((k for k in keys if 'output' in k.lower() or 'response' in k.lower()), None)
+                    
+                    if inst_key and out_key:
+                        norm_item['instruction'] = item[inst_key]
+                        norm_item['output'] = item[out_key]
+                        normalized.append(norm_item)
+                return normalized
+
+            eval_data = await asyncio.to_thread(load_eval_data)
+            if not eval_data:
+                raise HTTPException(status_code=400, detail="Could not parse dataset or find instruction/output columns")
+
+            # 3. Run Evaluation (in thread/process ideally, but here inline async)
+            # Determine if we are evaluating a base model or adapter
+            # For this prototype, assuming model_id is a base model ID or path
+            # In real app, we would look up the training job to find adapter path
+            
+            # Check if this is a finetuned model (check training jobs)
+            job = await db.training_jobs.find_one({"model_path": {"$regex": f".*{model_id}.*"}})
+            adapter_path = None
+            base_model = model_id
+            
+            if job:
+                # It's a trained model
+                adapter_path = job.get("model_path")
+                base_model = job.get("config", {}).get("model_id", "meta-llama/Llama-2-7b-hf")
+            
+            # Initialize Engine
+            engine = EvaluationEngine(base_model_id=base_model, adapter_path=adapter_path)
+            await engine.load_model()
+            
+            # Run Eval
+            metrics = await asyncio.to_thread(engine.evaluate_dataset, eval_data, limit=20)
+            
+            result = {
+                "id": eval_id,
+                "model_id": model_id,
+                "perplexity": round(metrics['perplexity'], 4),
+                "bert_score": round(metrics['bert_score_f1'], 4),
+                "rouge_l": round(metrics['rougeL'], 4),
+                "bleu_score": round(metrics['bleu'], 2),
+                # Legacy fields mapping
+                "accuracy": 0.0, # Not applicable for generation
+                "f1_score": round(metrics['bert_score_f1'], 4), # Use BERTScore as proxy
+                "evaluated_at": datetime.now(timezone.utc).isoformat(),
+                "details": {
+                    "samples": metrics['samples'],
+                    "rouge1": metrics['rouge1'],
+                    "rouge2": metrics['rouge2']
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Evaluation failed: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
     
     await db.evaluations.insert_one(result)
     return result

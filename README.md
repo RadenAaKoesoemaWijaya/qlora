@@ -26,8 +26,13 @@ Aplikasi web-based untuk fine-tuning Large Language Models (LLM) menggunakan met
 - Checkpoint management otomatis
 - Estimasi waktu completion
 
-### 5. **Evaluation & Analytics**
-- Evaluasi model dengan metrik: accuracy, perplexity, F1-score
+### 5. **Advanced Evaluation & Analytics**
+- **Evaluation Engine**: Menggunakan library `evaluate` dari Hugging Face.
+- **Metrics**:
+  - **BERTScore**: Semantic similarity (F1).
+  - **ROUGE-L**: Longest common subsequence (common for summarization).
+  - **BLEU**: N-gram precision (common for translation).
+  - **Perplexity**: Model fluency/uncertainty.
 - Perbandingan performa model
 - History training dan evaluasi
 
