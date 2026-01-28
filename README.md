@@ -85,6 +85,15 @@ cd backend
 # Install dependencies
 pip install -r requirements.txt
 
+# Jika mengalami error terkait Windows Long Path, gunakan salah satu:
+# 1. Aktifkan Windows Long Path:
+#    New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
+# 2. Gunakan requirements minimal (tanpa litellm):
+#    pip install -r requirements-minimal.txt
+# 3. Install manual tanpa litellm:
+#    pip install -r requirements.txt --no-deps
+#    pip install $(Get-Content requirements.txt | Where-Object { $_ -notmatch "litellm" })
+
 # Setup environment
 # Edit file .env sesuai kebutuhan
 # Default MongoDB: mongodb://localhost:27017
