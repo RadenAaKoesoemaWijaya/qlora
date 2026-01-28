@@ -109,6 +109,10 @@ cd frontend
 # Install dependencies
 yarn install
 
+atau
+
+npm install -g yarn
+
 # Setup environment
 # Edit file .env untuk backend URL
 # Default: REACT_APP_BACKEND_URL=http://localhost:8000
