@@ -1,60 +1,209 @@
 version: '3.8'
 
 services:
-  # Backend Service
+  # MongoDB database
+  mongodb:
+    image: mongo:7.0
+    container_name: qlora-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-password}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE:-qlora_db}
+    volumes:
+      - mongodb_data:/data/db
+      - ./docker/mongodb/init.js:/docker-entrypoint-initdb.d/init.js:ro
+    networks:
+      - qlora-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Redis for caching and session management
+  redis:
+    image: redis:7-alpine
+    container_name: qlora-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_password}
+    volumes:
+      - redis_data:/data
+    networks:
+      - qlora-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Backend API service
   backend:
-    build: 
-      context: ./backend
+    build:
+      context: .
       dockerfile: Dockerfile
+      target: backend
+    container_name: qlora-backend
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
-      - MONGO_URL=mongodb://mongo:27017
-      - DB_NAME=qlora_db
-      - CORS_ORIGINS=*
+      - DATABASE_URL=mongodb://${MONGO_USERNAME:-admin}:${MONGO_PASSWORD:-password}@mongodb:27017/${MONGO_DATABASE:-qlora_db}?authSource=admin
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-jwt-secret-key-change-in-production}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ENABLE_FILE_LOGGING=${ENABLE_FILE_LOGGING:-true}
+      - LOG_FILE_PATH=${LOG_FILE_PATH:-/app/logs/app.log}
+      - MAX_WORKERS=${MAX_WORKERS:-4}
+      - GPU_MEMORY_THRESHOLD=${GPU_MEMORY_THRESHOLD:-0.9}
+      - ENABLE_GPU_MONITORING=${ENABLE_GPU_MONITORING:-true}
+      - ENABLE_SECURITY_AUDIT=${ENABLE_SECURITY_AUDIT:-true}
+      - ENABLE_PERFORMANCE_MONITORING=${ENABLE_PERFORMANCE_MONITORING:-true}
+      - WANDB_API_KEY=${WANDB_API_KEY:-}
+      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN:-}
     volumes:
-      - ./backend/datasets:/app/datasets
-      - ./backend/checkpoints:/app/checkpoints
+      - ./logs:/app/logs
+      - ./models:/app/models
+      - ./checkpoints:/app/checkpoints
+      - ./data:/app/data
     depends_on:
-      - mongo
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - qlora-network
-    # Uncomment the following section to enable GPU support (requires NVIDIA Container Toolkit)
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
-  # Frontend Service
+  # Frontend service
   frontend:
     build:
-      context: ./frontend
+      context: .
       dockerfile: Dockerfile
-      args:
-        - REACT_APP_BACKEND_URL=http://localhost:8000
+      target: frontend
+    container_name: qlora-frontend
+    restart: unless-stopped
     ports:
-      - "3000:80"
+      - "80:80"
     depends_on:
       - backend
     networks:
       - qlora-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
-  # Database Service
-  mongo:
-    image: mongo:latest
+  # Full-stack service (backend + frontend)
+  fullstack:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fullstack
+    container_name: qlora-fullstack
+    restart: unless-stopped
     ports:
-      - "27017:27017"
+      - "8080:80"
+      - "8081:8000"
+    environment:
+      - DATABASE_URL=mongodb://${MONGO_USERNAME:-admin}:${MONGO_PASSWORD:-password}@mongodb:27017/${MONGO_DATABASE:-qlora_db}?authSource=admin
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-jwt-secret-key-change-in-production}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ENABLE_FILE_LOGGING=${ENABLE_FILE_LOGGING:-true}
+      - LOG_FILE_PATH=${LOG_FILE_PATH:-/app/logs/app.log}
+      - MAX_WORKERS=${MAX_WORKERS:-4}
+      - GPU_MEMORY_THRESHOLD=${GPU_MEMORY_THRESHOLD:-0.9}
+      - ENABLE_GPU_MONITORING=${ENABLE_GPU_MONITORING:-true}
+      - ENABLE_SECURITY_AUDIT=${ENABLE_SECURITY_AUDIT:-true}
+      - ENABLE_PERFORMANCE_MONITORING=${ENABLE_PERFORMANCE_MONITORING:-true}
+      - WANDB_API_KEY=${WANDB_API_KEY:-}
+      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN:-}
     volumes:
-      - mongo_data:/data/db
+      - ./logs:/app/logs
+      - ./models:/app/models
+      - ./checkpoints:/app/checkpoints
+      - ./data:/app/data
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - qlora-network
+    profiles:
+      - fullstack
 
-volumes:
-  mongo_data:
+  # Monitoring with Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: qlora-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - qlora-network
+    profiles:
+      - monitoring
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: qlora-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - qlora-network
+    profiles:
+      - monitoring
 
 networks:
   qlora-network:
     driver: bridge
+
+volumes:
+  mongodb_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:

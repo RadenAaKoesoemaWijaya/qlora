@@ -13,8 +13,9 @@ import wandb
 import logging
 from typing import Dict, Any, Optional
 from pathlib import Path
+import json
 
-logger = logging.getLogger(__name__)
+from .enhanced_logging_system import EnhancedLoggingSystem, LogCategory, LogContext
 
 class QLoRATrainingEngine:
     """
@@ -29,8 +30,15 @@ class QLoRATrainingEngine:
         self.trainer = None
         self.training_job_id = None
         
-        # Setup logging
-        logging.basicConfig(level=logging.INFO)
+        # Setup structured logging
+        self.structured_logger = EnhancedLoggingSystem(
+            component_name="QLoRATrainingEngine",
+            log_level="INFO",
+            enable_file_logging=True,
+            enable_console_logging=True,
+            log_file_path="logs/training_engine.log"
+        )
+        self.structured_logger.setup_logging()
         
     def setup_quantization_config(self) -> BitsAndBytesConfig:
         """Setup 4-bit quantization configuration."""
@@ -65,7 +73,19 @@ class QLoRATrainingEngine:
             Tuple (model, tokenizer)
         """
         try:
-            logger.info(f"Loading model: {model_id}")
+            # Create log context
+            context = LogContext(
+                job_id=self.training_job_id,
+                component="QLoRATrainingEngine",
+                operation="load_model_and_tokenizer"
+            )
+            
+            self.structured_logger.log(
+                level="INFO",
+                category=LogCategory.TRAINING,
+                message=f"Loading model: {model_id}",
+                context=context
+            )
             
             # Setup quantization
             bnb_config = self.setup_quantization_config()
@@ -104,12 +124,23 @@ class QLoRATrainingEngine:
             
             # Print trainable parameters
             trainable_params, all_param = self.model.get_nb_trainable_parameters()
-            logger.info(f"Trainable parameters: {trainable_params:,} / {all_param:,} ({100 * trainable_params / all_param:.2f}%)")
+            self.structured_logger.log(
+                level="INFO",
+                category=LogCategory.TRAINING,
+                message=f"Trainable parameters: {trainable_params:,} / {all_param:,} ({100 * trainable_params / all_param:.2f}%)",
+                context=context
+            )
             
             return self.model, self.tokenizer
             
         except Exception as e:
-            logger.error(f"Error loading model {model_id}: {str(e)}")
+            self.structured_logger.log(
+                level="ERROR",
+                category=LogCategory.TRAINING,
+                message=f"Error loading model {model_id}: {str(e)}",
+                context=context,
+                exc_info=True
+            )
             raise RuntimeError(f"Failed to load model: {str(e)}")
     
     def setup_training_arguments(self, job_id: str) -> TrainingArguments:
@@ -193,6 +224,22 @@ class QLoRATrainingEngine:
         try:
             self.training_job_id = job_id
             
+            # Create log context for training
+            context = LogContext(
+                job_id=job_id,
+                component="QLoRATrainingEngine",
+                operation="start_training"
+            )
+            
+            # Log training start with configuration
+            self.structured_logger.log(
+                level="INFO",
+                category=LogCategory.TRAINING,
+                message=f"Starting QLoRA training for job: {job_id}",
+                context=context,
+                extra_data={"training_config": self.config, "model_id": model_id}
+            )
+            
             # Initialize Weights & Biases jika diaktifkan
             if self.config.get("use_wandb", True):
                 wandb.init(
@@ -207,9 +254,6 @@ class QLoRATrainingEngine:
             
             # Create trainer
             trainer = self.create_trainer(model, tokenizer, train_dataset, job_id)
-            
-            logger.info(f"Starting QLoRA training for job: {job_id}")
-            logger.info(f"Training configuration: {self.config}")
             
             # Start training
             trainer.train()
@@ -227,7 +271,12 @@ class QLoRATrainingEngine:
             with open(config_path, "w") as f:
                 json.dump(self.config, f, indent=2)
             
-            logger.info(f"Training completed successfully. Model saved to: {final_model_path}")
+            self.structured_logger.log(
+                level="INFO",
+                category=LogCategory.TRAINING,
+                message=f"Training completed successfully. Model saved to: {final_model_path}",
+                context=context
+            )
             
             # Finalize W&B
             if self.config.get("use_wandb", True):
@@ -241,7 +290,13 @@ class QLoRATrainingEngine:
             }
             
         except Exception as e:
-            logger.error(f"Training failed for job {job_id}: {str(e)}")
+            self.structured_logger.log(
+                level="ERROR",
+                category=LogCategory.TRAINING,
+                message=f"Training failed for job {job_id}: {str(e)}",
+                context=context,
+                exc_info=True
+            )
             
             # Finalize W&B dengan status failed
             if self.config.get("use_wandb", True):
@@ -306,5 +361,25 @@ def load_qlora_model(model_path: str, base_model_id: str) -> tuple:
         return model, tokenizer
         
     except Exception as e:
-        logger.error(f"Error loading QLoRA model: {str(e)}")
+        # Create log context for utility function
+        context = LogContext(
+            component="QLoRATrainingEngine",
+            operation="load_qlora_model"
+        )
+        
+        # Note: For utility function, we need to create a logger instance
+        temp_logger = EnhancedLoggingSystem(
+            component_name="QLoRATrainingEngine",
+            log_level="ERROR",
+            enable_console_logging=True
+        )
+        temp_logger.setup_logging()
+        
+        temp_logger.log(
+            level="ERROR",
+            category=LogCategory.TRAINING,
+            message=f"Error loading QLoRA model: {str(e)}",
+            context=context,
+            exc_info=True
+        )
         raise RuntimeError(f"Failed to load QLoRA model: {str(e)}")

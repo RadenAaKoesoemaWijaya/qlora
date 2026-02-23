@@ -1,0 +1,1 @@
+// This file was used for testing TypeScript setup and can be safely ignored
