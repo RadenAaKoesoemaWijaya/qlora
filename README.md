@@ -255,6 +255,104 @@ Checkpoint Creation → Model Evaluation → Result Storage
 ./deploy.sh setup
 ```
 
+## ☁️ Cloud Deployment Recommendations
+
+> **Note**: QLoRA training memerlukan **GPU NVIDIA** yang tidak tersedia di Railway atau Render. Berikut platform yang direkomendasikan:
+
+### 🎯 Recommended Cloud Platforms for ML Training
+
+| Platform | GPU Support | Pricing | Best For |
+|----------|-------------|---------|----------|
+| **[RunPod](https://www.runpod.io)** | RTX 3090, A100, H100 | ~$0.20-0.50/jam | ⭐ Serverless GPU on-demand, API integration |
+| **[Lambda Labs](https://lambdalabs.com)** | A100, H100 | ~$1.10/jam A100 | Continuous training workloads |
+| **[Vast.ai](https://vast.ai)** | RTX 3090, A6000 | ~$0.15-0.30/jam | 💰 Termurah, peer-to-peer marketplace |
+| **[AWS EC2](https://aws.amazon.com/ec2)** | T4, V100, A100 | Spot: 70% off | Enterprise dengan existing infrastructure |
+| **[Google Cloud](https://cloud.google.com)** | T4, V100, A100 | Flexible | Vertex AI integration, auto-scaling |
+| **[Paperspace](https://www.paperspace.com)** | RTX 5000, A6000 | Free tier avail | Managed notebooks + API |
+
+### 🏗️ Hybrid Architecture (Recommended)
+
+```
+┌─────────────────────────────────────────┐
+│  Frontend (React) + Backend (FastAPI)   │
+│         ↓ Railway / Render              │  ← Web tier
+│         ↓ MongoDB Atlas / Redis Cloud   │  ← Managed DB
+└─────────────────────────────────────────┘
+                   │
+                   ↓ Webhook/Queue
+┌─────────────────────────────────────────┐
+│     Training Worker (RunPod/Vast.ai)    │
+│     - Docker dengan NVIDIA runtime      │  ← GPU tier
+│     - GPU 8GB+ untuk QLoRA              │
+│     - S3/GCS untuk model storage        │
+└─────────────────────────────────────────┘
+```
+
+### 💰 Cost Estimation (Monthly)
+
+| Component | Platform | Estimated Cost |
+|-----------|----------|----------------|
+| Web Tier | Railway | $20-50 |
+| Training GPU | RunPod (20 jam) | $100-200 |
+| Database | MongoDB Atlas (M10) | $60 |
+| Storage | AWS S3 (100GB) | $5 |
+| **Total** | | **~$185-315/bulan** |
+
+### 🚀 Quick Start Cloud Setup
+
+#### 1. Web Tier (Railway)
+```bash
+# Deploy frontend + backend
+curl -fsSL https://railway.app/install.sh | sh
+railway login
+railway init
+railway up
+```
+
+#### 2. Training Workers (RunPod)
+```python
+# Integrasi dengan RunPod Serverless API
+# Lihat: backend/core/training_engine.py
+
+import requests
+
+def start_training_on_runpod(config):
+    response = requests.post(
+        "https://api.runpod.io/v2/your-endpoint/run",
+        headers={"Authorization": f"Bearer {RUNPOD_API_KEY}"},
+        json={"input": config}
+    )
+    return response.json()
+```
+
+#### 3. Database (MongoDB Atlas)
+```env
+# .env
+DATABASE_URL=mongodb+srv://user:pass@cluster.mongodb.net/qlora_db
+```
+
+### ⚠️ Platform Limitations
+
+| Platform | GPU | Not Suitable Because |
+|----------|-----|---------------------|
+| **Railway** | ❌ | No GPU support |
+| **Render** | ❌ | No GPU support |
+| **Vercel** | ❌ | Serverless functions only |
+| **Heroku** | ❌ | No GPU, limited memory |
+
+### 📋 System Requirements for Cloud
+
+**Minimum untuk QLoRA Training:**
+- **GPU**: NVIDIA dengan 8GB+ VRAM (T4, RTX 3080, A100)
+- **Memory**: 16GB+ RAM
+- **Storage**: 100GB+ SSD untuk model checkpoints
+- **Network**: Stable connection untuk HuggingFace model download
+
+**Recommended:**
+- **GPU**: RTX 3090 (24GB) atau A100 (40GB)
+- **Memory**: 32GB+ RAM
+- **Storage**: 500GB+ NVMe SSD
+
 ## 🧪 Testing
 
 ### Backend Testing
