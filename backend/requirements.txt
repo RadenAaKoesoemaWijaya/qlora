@@ -19,7 +19,7 @@ cryptography==46.0.3
 # Machine Learning & AI
 torch==2.1.0
 transformers==4.36.0
-peft==0.7.1
+peft==0.10.0
 bitsandbytes==0.41.3
 datasets==2.15.0
 accelerate==0.25.0

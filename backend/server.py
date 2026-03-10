@@ -1,7 +1,7 @@
 from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from dotenv import load_dotenv
@@ -73,17 +73,110 @@ class DatasetUpload(BaseModel):
 class TrainingConfig(BaseModel):
     model_id: str
     dataset_id: str
+    # Training method selection
+    training_method: str = "qlora"  # qlora, dora, ia3, vera, lora_plus, adalora, oft
+    # Method-specific config
+    method_config: Dict[str, Any] = Field(default_factory=dict)
+    # LoRA/DoRA Configuration
     lora_rank: int = 16
     lora_alpha: int = 32
     lora_dropout: float = 0.05
+    target_modules: List[str] = ["q_proj", "v_proj", "k_proj", "o_proj"]
     learning_rate: float = 2e-4
     num_epochs: int = 3
     batch_size: int = 2
     max_seq_length: int = 512
-    target_modules: List[str] = ["q_proj", "v_proj", "k_proj", "o_proj"]
     use_gpu: bool = True
     gradient_accumulation_steps: int = 4
     use_wandb: bool = False  # Default to False for easier local testing
+    
+    @validator('model_id', 'dataset_id', 'training_method')
+    @classmethod
+    def validate_not_empty(cls, v: str) -> str:
+        """Validasi field tidak boleh kosong."""
+        if not v or not v.strip():
+            raise ValueError("Field cannot be empty")
+        return v.strip()
+    
+    @validator('training_method')
+    @classmethod
+    def validate_training_method(cls, v: str) -> str:
+        """Validasi training method yang didukung."""
+        valid_methods = {'qlora', 'dora', 'ia3', 'vera', 'lora_plus', 'adalora', 'oft'}
+        v_lower = v.lower().strip()
+        if v_lower not in valid_methods:
+            raise ValueError(f"Invalid training method: {v}. Must be one of: {', '.join(valid_methods)}")
+        return v_lower
+    
+    @validator('lora_rank')
+    @classmethod
+    def validate_lora_rank(cls, v: int) -> int:
+        """Validasi LoRA rank dalam range yang valid."""
+        if not isinstance(v, int):
+            raise ValueError("lora_rank must be an integer")
+        if v < 1 or v > 1024:
+            raise ValueError("lora_rank must be between 1 and 1024")
+        return v
+    
+    @validator('lora_alpha')
+    @classmethod
+    def validate_lora_alpha(cls, v: int) -> int:
+        """Validasi lora_alpha harus positif."""
+        if not isinstance(v, int):
+            raise ValueError("lora_alpha must be an integer")
+        if v < 1:
+            raise ValueError("lora_alpha must be at least 1")
+        return v
+    
+    @validator('learning_rate')
+    @classmethod
+    def validate_learning_rate(cls, v: float) -> float:
+        """Validasi learning rate dalam range yang valid."""
+        if not isinstance(v, (int, float)):
+            raise ValueError("learning_rate must be a number")
+        if v < 1e-6 or v > 1e-2:
+            raise ValueError("learning_rate must be between 1e-6 and 1e-2")
+        return float(v)
+    
+    @validator('num_epochs')
+    @classmethod
+    def validate_num_epochs(cls, v: int) -> int:
+        """Validasi number of epochs."""
+        if not isinstance(v, int):
+            raise ValueError("num_epochs must be an integer")
+        if v < 1 or v > 100:
+            raise ValueError("num_epochs must be between 1 and 100")
+        return v
+    
+    @validator('batch_size')
+    @classmethod
+    def validate_batch_size(cls, v: int) -> int:
+        """Validasi batch size."""
+        if not isinstance(v, int):
+            raise ValueError("batch_size must be an integer")
+        if v < 1 or v > 128:
+            raise ValueError("batch_size must be between 1 and 128")
+        return v
+    
+    @validator('max_seq_length')
+    @classmethod
+    def validate_max_seq_length(cls, v: int) -> int:
+        """Validasi max sequence length."""
+        if not isinstance(v, int):
+            raise ValueError("max_seq_length must be an integer")
+        if v < 64 or v > 8192:
+            raise ValueError("max_seq_length must be between 64 and 8192")
+        return v
+    
+    @validator('lora_dropout')
+    @classmethod
+    def validate_lora_dropout(cls, v: float) -> float:
+        """Validasi dropout rate."""
+        if not isinstance(v, (int, float)):
+            raise ValueError("lora_dropout must be a number")
+        if v < 0.0 or v > 1.0:
+            raise ValueError("lora_dropout must be between 0.0 and 1.0")
+        return float(v)
 
 class TrainingJob(BaseModel):
     id: str
@@ -467,23 +560,329 @@ async def get_evaluations():
     evals = await db.evaluations.find({}, {"_id": 0}).sort("evaluated_at", -1).to_list(50)
     return evals
 
-# Dashboard Stats
+# Dashboard Stats - Optimized dengan aggregation
 @api_router.get("/dashboard/stats")
 async def get_dashboard_stats():
-    """Get dashboard statistics"""
-    total_jobs = await db.training_jobs.count_documents({})
-    active_jobs = await db.training_jobs.count_documents({"status": "training"})
-    completed_jobs = await db.training_jobs.count_documents({"status": "completed"})
-    total_datasets = await db.datasets.count_documents({})
-    total_checkpoints = await db.checkpoints.count_documents({})
+    """Get dashboard statistics dengan optimized aggregation"""
+    # Single aggregation query untuk semua job stats (lebih efisien)
+    job_stats = await db.training_jobs.aggregate([
+        {
+            "$group": {
+                "_id": None,
+                "total": {"$sum": 1},
+                "active": {"$sum": {"$cond": [{"$eq": ["$status", "training"]}, 1, 0]}},
+                "completed": {"$sum": {"$cond": [{"$eq": ["$status", "completed"]}, 1, 0]}},
+                "failed": {"$sum": {"$cond": [{"$eq": ["$status", "failed"]}, 1, 0]}},
+                "queued": {"$sum": {"$cond": [{"$eq": ["$status", "initializing"]}, 1, 0]}}
+            }
+        }
+    ]).to_list(1)
+    
+    # Parallel queries untuk collections lain
+    datasets_count, checkpoints_count = await asyncio.gather(
+        db.datasets.count_documents({}),
+        db.checkpoints.count_documents({})
+    )
+    
+    # Extract stats dari aggregation result
+    stats = job_stats[0] if job_stats else {
+        "total": 0, "active": 0, "completed": 0, "failed": 0, "queued": 0
+    }
     
     return {
-        "total_training_jobs": total_jobs,
-        "active_training_jobs": active_jobs,
-        "completed_training_jobs": completed_jobs,
-        "total_datasets": total_datasets,
-        "total_checkpoints": total_checkpoints
+        "total_training_jobs": stats.get("total", 0),
+        "active_training_jobs": stats.get("active", 0),
+        "completed_training_jobs": stats.get("completed", 0),
+        "failed_training_jobs": stats.get("failed", 0),
+        "queued_training_jobs": stats.get("queued", 0),
+        "total_datasets": datasets_count,
+        "total_checkpoints": checkpoints_count
     }
+
+# Training Methods API
+@api_router.get("/training/methods")
+async def get_training_methods():
+    """Get available training methods dengan metadata"""
+    try:
+        from core.training_engine_factory import TrainingEngineFactory
+        methods = TrainingEngineFactory.get_available_methods()
+        default_method = TrainingEngineFactory.get_default_method()
+        
+        return {
+            "methods": methods,
+            "default_method": default_method,
+            "recommended_method": "dora" if "dora" in methods else "qlora"
+        }
+    except Exception as e:
+        logger.error(f"Error getting training methods: {e}")
+        # Fallback response jika import gagal
+        return {
+            "methods": {
+                "qlora": {
+                    "name": "QLoRA",
+                    "description": "Quantized Low-Rank Adaptation",
+                    "efficiency": "high",
+                    "performance": "excellent",
+                    "difficulty": "easy",
+                    "available": True
+                }
+            },
+            "default_method": "qlora",
+            "recommended_method": "qlora"
+        }
+
+@api_router.get("/training/methods/{method_id}/config-schema")
+async def get_method_config_schema(method_id: str):
+    """Get configuration schema untuk specific training method"""
+    schemas = {
+        "dora": {
+            "fields": [
+                {
+                    "name": "use_dora",
+                    "type": "boolean",
+                    "default": True,
+                    "label": "Enable DoRA",
+                    "description": "Aktifkan weight decomposition untuk performa lebih baik"
+                },
+                {
+                    "name": "dora_simple",
+                    "type": "boolean",
+                    "default": False,
+                    "label": "Simplified Mode",
+                    "description": "Mode sederhana untuk training lebih cepat"
+                }
+            ]
+        },
+        "lora_plus": {
+            "fields": [
+                {
+                    "name": "lora_plus_ratio",
+                    "type": "integer",
+                    "default": 16,
+                    "min": 1,
+                    "max": 64,
+                    "label": "Learning Rate Ratio (A:B)",
+                    "description": "Rasio learning rate antara matriks A dan B"
+                }
+            ]
+        },
+        "ia3": {
+            "fields": [
+                {
+                    "name": "ia3_target_modules",
+                    "type": "multiselect",
+                    "default": ["k_proj", "v_proj", "down_proj"],
+                    "options": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+                    "label": "Target Modules",
+                    "description": "Modules untuk element-wise scaling"
+                },
+                {
+                    "name": "ia3_feedforward_modules",
+                    "type": "multiselect",
+                    "default": ["down_proj"],
+                    "options": ["gate_proj", "up_proj", "down_proj"],
+                    "label": "Feedforward Modules",
+                    "description": "Subset dari target modules untuk feedforward adaptation"
+                }
+            ]
+        },
+        "vera": {
+            "fields": [
+                {
+                    "name": "vera_rank",
+                    "type": "integer",
+                    "default": 256,
+                    "min": 64,
+                    "max": 1024,
+                    "step": 64,
+                    "label": "Projection Rank (Frozen)",
+                    "description": "Rank untuk frozen random projections"
+                },
+                {
+                    "name": "vera_seed",
+                    "type": "integer",
+                    "default": 42,
+                    "min": 0,
+                    "max": 999999,
+                    "label": "Random Seed",
+                    "description": "Seed untuk reproducible initialization"
+                }
+            ]
+        },
+        "adalora": {
+            "fields": [
+                {
+                    "name": "adalora_init_r",
+                    "type": "integer",
+                    "default": 12,
+                    "min": 1,
+                    "max": 64,
+                    "label": "Initial Rank",
+                    "description": "Initial rank sebelum pruning"
+                },
+                {
+                    "name": "adalora_target_r",
+                    "type": "integer",
+                    "default": 4,
+                    "min": 1,
+                    "max": 32,
+                    "label": "Target Budget Rank",
+                    "description": "Target rank setelah pruning"
+                },
+                {
+                    "name": "adalora_tinit",
+                    "type": "integer",
+                    "default": 0,
+                    "min": 0,
+                    "label": "Warmup Steps (tinit)",
+                    "description": "Steps sebelum pruning dimulai"
+                },
+                {
+                    "name": "adalora_tfinal",
+                    "type": "integer",
+                    "default": 1000,
+                    "min": 100,
+                    "label": "Pruning End (tfinal)",
+                    "description": "Steps saat pruning selesai"
+                },
+                {
+                    "name": "adalora_deltaT",
+                    "type": "integer",
+                    "default": 10,
+                    "min": 1,
+                    "max": 100,
+                    "label": "Pruning Interval (deltaT)",
+                    "description": "Interval antar pruning steps"
+                },
+                {
+                    "name": "adalora_beta1",
+                    "type": "float",
+                    "default": 0.85,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01,
+                    "label": "Beta1 (Importance Decay)",
+                    "description": "Decay factor untuk importance scores"
+                }
+            ]
+        },
+        "oft": {
+            "fields": [
+                {
+                    "name": "oft_r",
+                    "type": "integer",
+                    "default": 8,
+                    "min": 1,
+                    "max": 64,
+                    "label": "OFT Rank",
+                    "description": "Rank untuk orthogonal transformation"
+                },
+                {
+                    "name": "oft_dropout",
+                    "type": "float",
+                    "default": 0.0,
+                    "min": 0.0,
+                    "max": 0.5,
+                    "step": 0.01,
+                    "label": "Module Dropout",
+                    "description": "Dropout probability untuk OFT modules"
+                },
+                {
+                    "name": "oft_init_weights",
+                    "type": "boolean",
+                    "default": True,
+                    "label": "Initialize Weights",
+                    "description": "Initialize dengan orthogonal matrices"
+                }
+            ]
+        },
+        "qlora": {
+            "fields": []  # No method-specific config for standard QLoRA
+        }
+    }
+    
+    if method_id not in schemas:
+        raise HTTPException(status_code=404, detail=f"Method {method_id} not found")
+    
+    return schemas[method_id]
+
+@api_router.get("/training/methods/{method_id}/recommendations")
+async def get_method_recommendations(method_id: str):
+    """Get recommendations untuk penggunaan method tertentu"""
+    recommendations = {
+        "dora": {
+            "recommended_for": [
+                "Production fine-tuning",
+                "Maximum performance requirements",
+                "Stability-critical applications",
+                "When using LoRA rank 8-32"
+            ],
+            "not_recommended_for": [
+                "Very low resource constraints (< 8GB VRAM)"
+            ],
+            "default_rank": 16,
+            "default_alpha": 32
+        },
+        "lora_plus": {
+            "recommended_for": [
+                "Fast iteration dan prototyping",
+                "Large-scale experiments",
+                "Quick convergence needs",
+                "When training time is critical"
+            ],
+            "recommended_ratio": 16,
+            "speedup": "2x convergence"
+        },
+        "ia3": {
+            "recommended_for": [
+                "Fast inference scenarios",
+                "Key-value adaptation tasks",
+                "When parameter count is critical",
+                "Classification tasks"
+            ],
+            "recommended_target_modules": ["k_proj", "v_proj", "down_proj"]
+        },
+        "vera": {
+            "recommended_for": [
+                "Edge deployment",
+                "Extreme resource constraints",
+                "Multiple adapter storage",
+                "IoT and mobile devices"
+            ],
+            "recommended_rank": 256,
+            "parameter_reduction": "99.999%"
+        },
+        "adalora": {
+            "recommended_for": [
+                "Complex fine-tuning tasks",
+                "Budget optimization needs",
+                "When layer importance varies",
+                "Multi-task scenarios"
+            ],
+            "recommended_budget_ratio": 0.3
+        },
+        "oft": {
+            "recommended_for": [
+                "Multimodal tasks",
+                "Vision-language models",
+                "Domain adaptation",
+                "When geometric stability matters"
+            ]
+        },
+        "qlora": {
+            "recommended_for": [
+                "General purpose fine-tuning",
+                "First-time users",
+                "Proven stability requirements",
+                "When other methods fail"
+            ]
+        }
+    }
+    
+    if method_id not in recommendations:
+        raise HTTPException(status_code=404, detail=f"Method {method_id} not found")
+    
+    return recommendations[method_id]
 
 # ============= TRAINING EXECUTION =============
 
@@ -502,7 +901,7 @@ async def run_training_job(job_id: str, config: TrainingConfig):
         await run_simulated_training(job_id, config)
 
 async def run_real_training(job_id: str, config: TrainingConfig):
-    """Execute real QLoRA training"""
+    """Execute real training dengan metode yang dipilih"""
     try:
         # Update status
         await db.training_jobs.update_one(
@@ -510,17 +909,23 @@ async def run_real_training(job_id: str, config: TrainingConfig):
             {"$set": {"status": "initializing"}}
         )
 
-        # 1. Get dataset info
+        # 1. Get dataset info dengan security validation
+        from core.security import validate_dataset_path
+        
         dataset_info = await db.datasets.find_one({"id": config.dataset_id})
         if not dataset_info:
             raise ValueError("Dataset not found")
             
         file_path = dataset_info.get("file_path")
+        
+        # Security: Validasi path untuk mencegah path traversal
+        if not validate_dataset_path(file_path):
+            raise HTTPException(status_code=400, detail="Invalid dataset path - possible path traversal attack")
+        
         if not file_path or not os.path.exists(file_path):
             raise FileNotFoundError(f"Dataset file not found at {file_path}")
 
         # 2. Map Model ID
-        # Mapping simplified for prototype
         MODEL_MAP = {
             "llama-2-7b": "meta-llama/Llama-2-7b-hf",
             "llama-3-8b": "meta-llama/Meta-Llama-3-8B",
@@ -531,6 +936,7 @@ async def run_real_training(job_id: str, config: TrainingConfig):
 
         # 3. Process Dataset (Blocking, run in thread)
         def process_data():
+            from core.data_processor import DataProcessor
             tokenizer = AutoTokenizer.from_pretrained(real_model_id, trust_remote_code=True)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -551,17 +957,78 @@ async def run_real_training(job_id: str, config: TrainingConfig):
                 
             return processed['dataset']
 
-        # Run data processing in thread
+        # Run data processing in thread dengan timeout
         logger.info("Processing dataset...")
-        train_dataset = await asyncio.to_thread(process_data)
+        try:
+            train_dataset = await asyncio.wait_for(
+                asyncio.to_thread(process_data),
+                timeout=300  # 5 minutes timeout
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Dataset processing timeout for job {job_id}")
+            await db.training_jobs.update_one(
+                {"id": job_id},
+                {"$set": {"status": "failed", "error": "Dataset processing timeout (5 minutes exceeded)"}}
+            )
+            return
         
-        # 4. Initialize Engine & Train
-        engine = QLoRATrainingEngine(config.dict())
+        # 4. Get training method
+        training_method = config.training_method.lower()
+        logger.info(f"Using training method: {training_method}")
         
-        # We need to modify start_training to be truly async or run in thread
-        # Since start_training in core is defined async but has blocking calls, 
-        # we will wrap it. Ideally refactor core, but for now:
-        await engine.start_training(job_id, real_model_id, train_dataset, db)
+        # Update job dengan method info
+        await db.training_jobs.update_one(
+            {"id": job_id},
+            {"$set": {
+                "status": "training",
+                "training_method": training_method,
+                "method_config": config.method_config
+            }}
+        )
+        
+        # 5. Initialize Engine menggunakan Factory
+        from core.training_engine_factory import TrainingEngineFactory
+        
+        # Merge base config dengan method-specific config
+        merged_config = {
+            **config.dict(),
+            **config.method_config  # Method-specific config override
+        }
+        
+        engine = None
+        try:
+            engine = TrainingEngineFactory.create_engine(training_method, merged_config)
+            
+            # 6. Start Training
+            result = await engine.start_training(job_id, real_model_id, train_dataset, db)
+            
+            # Update final status
+            if result["status"] == "completed":
+                await db.training_jobs.update_one(
+                    {"id": job_id},
+                    {"$set": {
+                        "status": "completed",
+                        "progress": 100.0,
+                        "model_path": result.get("model_path"),
+                        "completed_at": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+            else:
+                await db.training_jobs.update_one(
+                    {"id": job_id},
+                    {"$set": {
+                        "status": "failed",
+                        "error": result.get("error", "Unknown error")
+                    }}
+                )
+        finally:
+            # Cleanup engine resources
+            if engine is not None:
+                try:
+                    await engine.cleanup()
+                    logger.info(f"Engine cleanup completed for job {job_id}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Engine cleanup failed for job {job_id}: {cleanup_error}")
 
     except Exception as e:
         logger.error(f"Real training failed: {e}")
