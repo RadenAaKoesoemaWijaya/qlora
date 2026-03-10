@@ -18,8 +18,8 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app/backend
 
 # Copy requirements and install Python dependencies
-COPY backend/core/requirements-new.txt .
-RUN pip install --no-cache-dir -r requirements-new.txt
+COPY backend/core/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Production stage for backend
 FROM python:3.11-slim as backend
