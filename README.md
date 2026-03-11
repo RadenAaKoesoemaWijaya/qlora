@@ -166,13 +166,66 @@ chmod +x deploy.sh
 ./deploy.sh setup
 ```
 
-### Access Points
-- **Frontend**: http://localhost
-- **Backend API**: http://localhost:8000/docs
-- **Grafana Monitoring**: http://localhost:3000 (admin/admin)
-- **Prometheus Metrics**: http://localhost:9090
+### 🐧 Linux & WSL2 Installation
 
-### Development Setup
+### 🐧 Linux & WSL2 Installation
+
+Untuk instalasi di Linux dan WSL2, gunakan konfigurasi khusus yang telah dioptimasi:
+
+#### Prerequisites
+```bash
+# Update system packages
+sudo apt update && sudo apt upgrade -y
+
+# Install Docker
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+
+# Install NVIDIA Container Toolkit (untuk GPU support)
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
+curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | sudo tee /etc/apt/sources.list.d/nvidia-docker.list
+sudo apt-get update && sudo apt-get install -y nvidia-docker2
+sudo systemctl restart docker
+```
+
+#### Quick Setup
+```bash
+# Clone repository
+git clone <repository-url>
+cd qlora
+
+# Run automated setup
+chmod +x setup-wsl2.sh
+./setup-wsl2.sh
+
+# Start application (tanpa GPU)
+docker-compose -f docker-compose.wsl2.yml up -d
+
+# Start application (dengan GPU)
+docker-compose -f docker-compose.wsl2-gpu.yml up -d
+```
+
+#### Access Points (WSL2)
+| Service | URL | Port |
+|---------|------|-------|
+| Frontend | http://localhost:8002 | 8002 |
+| Backend API | http://localhost:8001 | 8001 |
+| MongoDB | localhost:27018 | 27018 |
+| Redis | localhost:6380 | 6380 |
+| Grafana | http://localhost:3000 | 3000 |
+| Prometheus | http://localhost:9090 | 9090 |
+
+#### Troubleshooting WSL2
+Lihat `LINUX_WSL2_INSTALLATION_FIXES.md` untuk troubleshooting lengkap.
+
+**Common Issues:**
+- **Port conflicts**: Gunakan port berbeda di `docker-compose.wsl2.yml`
+- **Permission denied**: Jalankan `sudo usermod -aG docker $USER` dan `newgrp docker`
+- **GPU not available**: Install NVIDIA Container Toolkit
+- **Build failures**: Pastikan `backend/core/requirements-new.txt` ada
+
+#### Development Setup
 ```bash
 # Backend setup
 cd backend
