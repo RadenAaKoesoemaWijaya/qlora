@@ -1,0 +1,195 @@
+# Azure-optimized Multi-stage build untuk QLoRA Application
+# Optimized untuk Azure Container Instances dan Container Apps
+
+# Backend Builder Stage
+FROM python:3.11-slim as backend-builder
+
+# Set environment variables untuk build
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=60
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    git \
+    curl \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Set work directory
+WORKDIR /app/backend
+
+# Copy requirements first untuk Docker layer caching
+COPY backend/core/requirements.txt .
+
+# Install Python dependencies dengan optimizations
+RUN pip install --no-cache-dir \
+    --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir -r requirements.txt \
+    && find /usr/local/lib/python3.11/site-packages -name "*.pyc" -delete \
+    && find /usr/local/lib/python3.11/site-packages -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# Production Backend Stage
+FROM python:3.11-slim as backend
+
+# Set environment variables untuk production
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PORT=8000 \
+    WORKERS=4 \
+    MAX_REQUESTS=1000 \
+    MAX_REQUESTS_JITTER=100
+
+# Install runtime dependencies saja
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create non-root user untuk security
+RUN groupadd -r qlora && useradd -r -g qlora qlora
+
+# Set work directory
+WORKDIR /app
+
+# Copy Python packages dari builder stage
+COPY --from=backend-builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=backend-builder /usr/local/bin /usr/local/bin
+
+# Copy backend code
+COPY backend/ ./backend/
+
+# Create directories dengan proper permissions
+RUN mkdir -p logs models checkpoints data \
+    && chown -R qlora:qlora /app
+
+# Switch ke non-root user
+USER qlora
+
+# Expose port
+EXPOSE 8000
+
+# Health check yang robust
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Startup script untuk graceful shutdown
+COPY docker/azure/backend-start.sh /app/backend-start.sh
+RUN chmod +x /app/backend-start.sh
+
+# Run dengan gunicorn untuk production
+CMD ["/app/backend-start.sh"]
+
+# Frontend Builder Stage
+FROM node:18-alpine as frontend-builder
+
+# Set work directory
+WORKDIR /app/frontend
+
+# Copy package files
+COPY frontend/package*.json ./
+
+# Install dependencies dengan optimizations
+RUN npm ci --only=production --legacy-peer-deps --no-audit --no-fund
+
+# Copy frontend code
+COPY frontend/ ./
+
+# Build dengan optimizations
+RUN npm run build \
+    && find /app/frontend/dist -name "*.map" -delete
+
+# Production Frontend Stage
+FROM nginx:alpine as frontend
+
+# Install curl untuk health check
+RUN apk add --no-cache curl
+
+# Copy built frontend files
+COPY --from=frontend-builder /app/frontend/dist /usr/share/nginx/html
+
+# Copy optimized nginx config untuk Azure
+COPY docker/azure/nginx-azure.conf /etc/nginx/nginx.conf
+
+# Create non-root user
+RUN addgroup -g 1001 -S nginx \
+    && adduser -S nginx -u 1001
+
+# Set proper permissions
+RUN chown -R nginx:nginx /usr/share/nginx/html \
+    && chown -R nginx:nginx /var/cache/nginx \
+    && chown -R nginx:nginx /var/log/nginx \
+    && chown -R nginx:nginx /etc/nginx/conf.d
+
+# Switch ke non-root user
+USER nginx
+
+# Expose port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Start nginx
+CMD ["nginx", "-g", "daemon off;"]
+
+# Full-stack Production Stage
+FROM python:3.11-slim as fullstack
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PORT=8000 \
+    WORKERS=4
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    nginx \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create non-root user
+RUN groupadd -r qlora && useradd -r -g qlora qlora
+
+# Set work directory
+WORKDIR /app
+
+# Copy backend code dan dependencies
+COPY --from=backend-builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=backend-builder /usr/local/bin /usr/local/bin
+COPY backend/ ./backend/
+
+# Copy frontend build
+COPY --from=frontend-builder /app/frontend/dist /usr/share/nginx/html
+
+# Copy nginx config
+COPY docker/azure/nginx-azure.conf /etc/nginx/nginx.conf
+
+# Create directories
+RUN mkdir -p logs models checkpoints data \
+    && chown -R qlora:qlora /app /usr/share/nginx/html /var/cache/nginx /var/log/nginx /etc/nginx/conf.d
+
+# Switch ke non-root user
+USER qlora
+
+# Expose ports
+EXPOSE 8000 8080
+
+# Health check untuk kedua services
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8080/health && curl -f http://localhost:8000/health || exit 1
+
+# Startup script
+COPY docker/azure/fullstack-start.sh /app/fullstack-start.sh
+RUN chmod +x /app/fullstack-start.sh
+
+CMD ["/app/fullstack-start.sh"]
