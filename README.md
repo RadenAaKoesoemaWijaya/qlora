@@ -148,82 +148,303 @@ curl http://localhost:8000/api/training/methods/dora/recommendations
 
 ## 🛠️ Instalasi dan Setup
 
-### Quick Start (Recommended)
+### 🎯 Quick Start (Recommended)
+
+**Pilih platform Anda:**
+- **Windows dengan WSL2**: Jalankan `./setup-wsl2.sh`
+- **Linux Native**: Jalankan `./setup-linux.sh`
+- **Manual**: Ikuti langkah-langkah di bawah
+
 ```bash
 # 1. Clone repository
 git clone <repository-url>
 cd qlora
 
-# 2. Setup environment
+# 2. Jalankan setup otomatis (pilih salah satu)
+# Untuk Windows WSL2
+chmod +x setup-wsl2.sh
+./setup-wsl2.sh
+
+# Untuk Linux Native
+chmod +x setup-linux.sh
+./setup-linux.sh
+
+# 3. Setup environment (jika tidak otomatis)
 cp .env.example .env
 # Edit .env dengan konfigurasi Anda
 
-# 3. Validasi environment
+# 4. Validasi environment
 python backend/core/environment_validator.py --env-file .env
 
-# 4. Deploy aplikasi
+# 5. Deploy aplikasi
 chmod +x deploy.sh
 ./deploy.sh setup
 ```
 
 ### 🐧 Linux & WSL2 Installation
 
-### 🐧 Linux & WSL2 Installation
+#### ⚡ Automated Setup (Recommended)
 
-Untuk instalasi di Linux dan WSL2, gunakan konfigurasi khusus yang telah dioptimasi:
-
-#### Prerequisites
+**Windows WSL2:**
 ```bash
-# Update system packages
-sudo apt update && sudo apt upgrade -y
+# Pastikan WSL2 sudah terinstall
+wsl --install
 
-# Install Docker
-curl -fsSL https://get.docker.com -o get-docker.sh
-sudo sh get-docker.sh
+# Clone repository
+git clone <repository-url>
+cd qlora
 
-# Install NVIDIA Container Toolkit (untuk GPU support)
-distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
-curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
-curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | sudo tee /etc/apt/sources.list.d/nvidia-docker.list
-sudo apt-get update && sudo apt-get install -y nvidia-docker2
-sudo systemctl restart docker
+# Jalankan setup otomatis
+chmod +x setup-wsl2.sh
+./setup-wsl2.sh
 ```
 
-#### Quick Setup
+**Linux Native (Ubuntu/Debian/Fedora/CentOS/Arch):**
 ```bash
 # Clone repository
 git clone <repository-url>
 cd qlora
 
-# Run automated setup
-chmod +x setup-wsl2.sh
-./setup-wsl2.sh
-
-# Start application (tanpa GPU)
-docker-compose -f docker-compose.wsl2.yml up -d
-
-# Start application (dengan GPU)
-docker-compose -f docker-compose.wsl2-gpu.yml up -d
+# Jalankan setup otomatis
+chmod +x setup-linux.sh
+./setup-linux.sh
 ```
 
-#### Access Points (WSL2)
-| Service | URL | Port |
-|---------|------|-------|
-| Frontend | http://localhost:8002 | 8002 |
-| Backend API | http://localhost:8001 | 8001 |
-| MongoDB | localhost:27018 | 27018 |
-| Redis | localhost:6380 | 6380 |
-| Grafana | http://localhost:3000 | 3000 |
-| Prometheus | http://localhost:9090 | 9090 |
+#### 🔧 Manual Setup
 
-#### Troubleshooting WSL2
-Lihat `LINUX_WSL2_INSTALLATION_FIXES.md` untuk troubleshooting lengkap.
+##### Prerequisites
+**System Requirements:**
+- **OS**: Linux (Ubuntu 20.04+/Debian 11+/Fedora 35+/CentOS 8+/Arch) atau WSL2
+- **Memory**: Minimum 16GB RAM (32GB+ recommended untuk large models)
+- **Storage**: 100GB+ available disk space (SSD recommended)
+- **GPU**: NVIDIA GPU dengan 8GB+ VRAM (RTX 3080/4070 atau better) - optional
+- **Network**: Stable internet connection untuk model download
 
-**Common Issues:**
-- **Port conflicts**: Gunakan port berbeda di `docker-compose.wsl2.yml`
-- **Permission denied**: Jalankan `sudo usermod -aG docker $USER` dan `newgrp docker`
-- **GPU not available**: Install NVIDIA Container Toolkit
-- **Build failures**: Pastikan `backend/core/requirements-new.txt` ada
+**Software Dependencies:**
+- Docker 20.10+ dengan Docker Compose 2.0+
+- Python 3.11+ (untuk environment validation)
+- Git
+- NVIDIA Driver 470+ (untuk GPU support)
+- CUDA Toolkit 11.0+ (untuk GPU acceleration)
+
+##### Step-by-Step Installation
+
+**1. System Preparation:**
+```bash
+# Update system
+sudo apt update && sudo apt upgrade -y
+
+# Install essential packages
+sudo apt install -y curl wget git unzip build-essential python3 python3-pip
+```
+
+**2. Docker Installation:**
+```bash
+# Remove old versions
+sudo apt-get remove -y docker docker-engine docker.io containerd runc
+
+# Add Docker's official GPG key
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+# Set up repository
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Install Docker Engine
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# Add user to docker group
+sudo usermod -aG docker $USER
+newgrp docker  # Apply group changes
+
+# Start Docker
+sudo systemctl enable docker
+sudo systemctl start docker
+```
+
+**3. GPU Support (Optional but Recommended):**
+```bash
+# Install NVIDIA Container Toolkit
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+
+# Configure Docker runtime
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+
+# Test GPU in container
+docker run --rm --gpus all nvidia/cuda:11.0-base nvidia-smi
+```
+
+**4. Application Setup:**
+```bash
+# Clone repository
+git clone <repository-url>
+cd qlora
+
+# Create environment file
+cp .env.example .env
+# Edit .env dengan password dan keys yang aman
+
+# Validate environment
+python3 backend/core/environment_validator.py --env-file .env
+
+# Deploy application
+chmod +x deploy.sh
+./deploy.sh setup
+```
+
+#### 🪟 Windows Installation
+
+##### Method 1: WSL2 (Recommended)
+```powershell
+# Install WSL2
+wsl --install
+
+# Restart dan setup Ubuntu
+wsl --set-default-version 2
+
+# Inside WSL2 Ubuntu:
+cd /mnt/d/qlora  # atau path tempat clone
+chmod +x setup-wsl2.sh
+./setup-wsl2.sh
+```
+
+##### Method 2: Docker Desktop
+```powershell
+# Install Docker Desktop for Windows
+# Download dari https://www.docker.com/products/docker-desktop
+
+# Enable WSL2 integration in Docker Desktop settings
+
+# Clone repository
+git clone <repository-url>
+cd qlora
+
+# Setup environment
+copy .env.example .env
+# Edit .env dengan text editor
+
+# Deploy
+docker-compose up -d
+```
+
+##### Method 3: Git Bash + Docker Desktop
+```bash
+# Install Git Bash and Docker Desktop
+
+# Clone in Git Bash
+git clone <repository-url>
+cd qlora
+
+# Setup environment
+cp .env.example .env
+
+# Deploy using deploy.sh
+chmod +x deploy.sh
+./deploy.sh setup
+```
+
+#### 🍎 macOS Installation
+
+```bash
+# Install Homebrew
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install Docker Desktop
+brew install --cask docker
+
+# Install Python
+brew install python@3.11
+
+# Clone repository
+git clone <repository-url>
+cd qlora
+
+# Setup environment
+cp .env.example .env
+# Edit .env dengan nano atau vim
+
+# Deploy
+chmod +x deploy.sh
+./deploy.sh setup
+```
+
+#### 🔍 Troubleshooting Installation
+
+**Common Issues and Solutions:**
+
+**Docker Issues:**
+```bash
+# Permission denied
+sudo usermod -aG docker $USER
+newgrp docker
+
+# Docker daemon not running
+sudo systemctl start docker
+sudo systemctl enable docker
+
+# Port conflicts
+sudo netstat -tulpn | grep :80
+# Kill processes using ports or change ports in docker-compose.yml
+```
+
+**GPU Issues:**
+```bash
+# NVIDIA driver not found
+sudo apt install nvidia-driver-470
+# Reboot system
+
+# CUDA not available
+wget https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_520.61.05_linux.run
+sudo sh cuda_11.8.0_520.61.05_linux.run
+
+# Test GPU in container
+docker run --rm --gpus all nvidia/cuda:11.8-base nvidia-smi
+```
+
+**Memory Issues:**
+```bash
+# Increase swap space
+sudo fallocate -l 8G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+# Check memory usage
+free -h
+htop
+```
+
+**Network Issues:**
+```bash
+# Check firewall
+sudo ufw status
+sudo ufw allow 80/tcp
+sudo ufw allow 8000/tcp
+
+# Check DNS
+nslookup google.com
+# Fix DNS if needed
+sudo nano /etc/resolv.conf
+```
+
+**Build Issues:**
+```bash
+# Clean Docker cache
+docker system prune -a
+
+# Rebuild without cache
+docker-compose build --no-cache
+
+# Check disk space
+df -h
+docker system df
+```
 
 #### Development Setup
 ```bash
@@ -541,15 +762,6 @@ def start_training_on_runpod(config):
 # .env
 DATABASE_URL=mongodb+srv://user:pass@cluster.mongodb.net/qlora_db
 ```
-
-### ⚠️ Platform Limitations
-
-| Platform | GPU | Not Suitable Because |
-|----------|-----|---------------------|
-| **Railway** | ❌ | No GPU support |
-| **Render** | ❌ | No GPU support |
-| **Vercel** | ❌ | Serverless functions only |
-| **Heroku** | ❌ | No GPU, limited memory |
 
 ### 📋 System Requirements for Cloud
 
