@@ -486,6 +486,291 @@ WANDB_API_KEY=your-wandb-api-key
 HUGGINGFACE_TOKEN=your-huggingface-token
 ```
 
+## ☁️ Azure Cloud Deployment
+
+### 🚀 Azure Container Apps Deployment (Recommended)
+
+**Prerequisites:**
+- Azure CLI installed and configured
+- Azure subscription with appropriate permissions
+- Docker installed locally
+
+#### Method 1: Automated Deployment Script
+
+```bash
+# 1. Clone repository
+git clone <repository-url>
+cd qlora
+
+# 2. Jalankan Azure deployment script
+chmod +x deploy-azure.sh
+./deploy-azure.sh
+```
+
+**What gets deployed:**
+- **Azure Container Registry** untuk Docker images
+- **Azure Container Apps** untuk backend dan frontend
+- **Azure Cosmos DB** (MongoDB compatible) untuk database
+- **Azure Redis Cache** untuk caching dan session
+- **Azure Storage Account** untuk persistent storage
+- **Application Insights** untuk monitoring dan logging
+
+#### Method 2: ARM Template Deployment
+
+```bash
+# 1. Login ke Azure
+az login
+
+# 2. Create resource group
+az group create --name qlora-rg --location eastus
+
+# 3. Deploy dengan ARM template
+az deployment group create \
+  --resource-group qlora-rg \
+  --template-file azure/azuredeploy.json \
+  --parameters projectName=qlora location=eastus
+
+# 4. Build dan push images ke ACR
+ACR_NAME=$(az deployment group show \
+  --resource-group qlora-rg \
+  --name azuredeploy \
+  --query properties.outputs.containerRegistryLoginServer.value -o tsv)
+
+# Login ke ACR
+az acr login --name $ACR_NAME
+
+# Build dan push images
+docker build -f Dockerfile.azure -t $ACR_NAME/qlora-backend:latest --target backend .
+docker build -f Dockerfile.azure -t $ACR_NAME/qlora-frontend:latest --target frontend .
+docker push $ACR_NAME/qlora-backend:latest
+docker push $ACR_NAME/qlora-frontend:latest
+```
+
+### 🔧 Azure Configuration
+
+#### Environment Variables untuk Azure
+
+```env
+# Database (Cosmos DB)
+DATABASE_URL=mongodb://<username>:<password>@<cosmos-db-name>.mongo.cosmos.azure.com:10255/qlora_db?ssl=true&replicaSet=globaldb&retrywrites=false&maxIdleTimeMS=120000&appName=@<cosmos-db-name>@
+
+# Redis Cache
+REDIS_URL=redis://:<password>@<redis-name>.redis.cache.windows.net:6380/0
+REDIS_PASSWORD=<your-redis-password>
+
+# Security (gunakan Azure Key Vault untuk production)
+SECRET_KEY=<your-32-character-secret-key>
+JWT_SECRET_KEY=<your-32-character-jwt-secret-key>
+
+# Application
+ENVIRONMENT=production
+LOG_LEVEL=INFO
+MAX_WORKERS=4
+
+# Azure-specific
+ENABLE_GPU_MONITORING=false
+AZURE_CLIENT_ID=<your-azure-client-id>
+AZURE_CLIENT_SECRET=<your-azure-client-secret>
+AZURE_TENANT_ID=<your-azure-tenant-id>
+
+# Monitoring
+APPLICATIONINSIGHTS_CONNECTION_STRING=<your-app-insights-connection-string>
+```
+
+#### Azure Storage Configuration
+
+```bash
+# Create Azure Files untuk persistent storage
+az storage account create \
+  --name qlorastorage \
+  --resource-group qlora-rg \
+  --sku Standard_LRS \
+  --kind StorageV2
+
+# Create file shares
+az storage share create \
+  --account-name qlorastorage \
+  --name models
+
+az storage share create \
+  --account-name qlorastorage \
+  --name checkpoints
+
+az storage share create \
+  --account-name qlorastorage \
+  --name data
+```
+
+### 📊 Azure Monitoring & Logging
+
+#### Application Insights Setup
+
+```bash
+# Create Application Insights
+az monitor app-insights component create \
+  --app qlora-insights \
+  --location eastus \
+  --resource-group qlora-rg \
+  --application-type web
+
+# Get connection string
+CONNECTION_STRING=$(az monitor app-insights component show \
+  --app qlora-insights \
+  --resource-group qlora-rg \
+  --query connectionString -o tsv)
+```
+
+#### Log Analytics Queries
+
+```kql
+// Error rate analysis
+requests
+| where timestamp > ago(1h)
+| where success == false
+| summarize count() by name, resultCode
+| order by count_ desc
+
+// Performance metrics
+requests
+| where timestamp > ago(1h)
+| summarize avg(duration) by name, bin(timestamp, 5m)
+| render timechart
+
+// GPU usage (jika menggunakan Azure GPU VMs)
+AzureMetrics
+| where Timestamp > ago(1h)
+| where Name == "GPUMemoryUtilization"
+| summarize avg(Val) by bin(Timestamp, 5m)
+| render timechart
+```
+
+### 🔐 Security Best Practices untuk Azure
+
+#### 1. Azure Key Vault untuk Secrets
+
+```bash
+# Create Key Vault
+az keyvault create \
+  --name qlora-keyvault \
+  --resource-group qlora-rg \
+  --location eastus
+
+# Store secrets
+az keyvault secret set \
+  --vault-name qlora-keyvault \
+  --name "database-connection-string" \
+  --value "<your-connection-string>"
+
+az keyvault secret set \
+  --vault-name qlora-keyvault \
+  --name "redis-password" \
+  --value "<your-redis-password>"
+```
+
+#### 2. Managed Identity
+
+```bash
+# Enable managed identity untuk Container Apps
+az containerapp identity assign \
+  --name qlora-backend \
+  --resource-group qlora-rg \
+  --system-assigned
+
+# Grant access ke Key Vault
+az keyvault set-policy \
+  --name qlora-keyvault \
+  --object-id <managed-identity-object-id> \
+  --secret-permissions get list
+```
+
+#### 3. Network Security
+
+```bash
+# Create VNet untuk isolation
+az network vnet create \
+  --name qlora-vnet \
+  --resource-group qlora-rg \
+  --address-prefix 10.0.0.0/16
+
+# Create subnet untuk Container Apps
+az network vnet subnet create \
+  --name qlora-subnet \
+  --vnet-name qlora-vnet \
+  --resource-group qlora-rg \
+  --address-prefix 10.0.1.0/24 \
+  --delegations Microsoft.App/environments
+```
+
+### 🎯 Azure Deployment Options
+
+| Service | Best For | Pricing | Features |
+|---------|-----------|----------|----------|
+| **Container Apps** | Production workloads | Pay-per-use | Auto-scaling, load balancing, networking |
+| **Container Instances** | Simple apps | Per-container | Fast startup, isolated containers |
+| **Azure Kubernetes Service (AKS)** | Complex microservices | Cluster-based | Full Kubernetes control |
+| **App Service** | Web applications | Tier-based | Integrated CI/CD, easy scaling |
+
+### 💰 Cost Estimation (Monthly)
+
+| Component | SKU | Estimated Cost |
+|-----------|-----|----------------|
+| Container Apps (Backend) | 2 CPU, 4GB RAM | $150-200 |
+| Container Apps (Frontend) | 0.5 CPU, 1GB RAM | $30-50 |
+| Cosmos DB | Standard (RU/s) | $100-150 |
+| Redis Cache | Basic C0 | $25-35 |
+| Storage Account | Standard LRS | $20-30 |
+| Application Insights | Basic | $20-30 |
+| **Total** | | **$345-495/bulan** |
+
+### 🔍 Troubleshooting Azure Deployment
+
+**Common Issues:**
+
+1. **Container App tidak starting**
+```bash
+# Check logs
+az containerapp logs show --name qlora-backend --resource-group qlora-rg --follow
+
+# Check revision
+az containerapp revision list --name qlora-backend --resource-group qlora-rg
+```
+
+2. **Database connection issues**
+```bash
+# Test Cosmos DB connection
+az cosmosdb mongodb database create \
+  --account-name qlora-cosmos \
+  --resource-group qlora-rg \
+  --name test-db
+
+# Check firewall rules
+az cosmosdb show --name qlora-cosmos --resource-group qlora-rg
+```
+
+3. **Redis connection issues**
+```bash
+# Test Redis connection
+az redis show --name qlora-redis --resource-group qlora-rg
+
+# Check access keys
+az redis list-keys --name qlora-redis --resource-group qlora-rg
+```
+
+4. **Performance issues**
+```bash
+# Scale up containers
+az containerapp update \
+  --name qlora-backend \
+  --resource-group qlora-rg \
+  --cpu 4 --memory 8Gi
+
+# Enable Dapr for advanced features
+az containerapp dapr enable \
+  --name qlora-backend \
+  --resource-group qlora-rg \
+  --dapr-app-id qlora-backend
+```
+
 ## 🎯 Mekanisme Kerja
 
 ### 1. **Proses Fine-tuning**
