@@ -72,8 +72,8 @@ const Dashboard = () => {
     <div className="space-y-6" data-testid="dashboard">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold text-slate-900">Dashboard</h1>
-        <p className="text-slate-600 mt-1">Overview of your medical LLM fine-tuning projects</p>
+        <h1 className="text-3xl font-bold text-slate-900">TechnoFriendR Dashboard</h1>
+        <p className="text-slate-600 mt-1">Overview of your AI fine-tuning projects</p>
       </div>
 
       {/* Stats Grid */}

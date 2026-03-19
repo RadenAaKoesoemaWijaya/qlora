@@ -1,6 +1,6 @@
-# QLoRA Fine-tuning Platform
+# TechnoFriendR - AI Fine-tuning Platform
 
-Platform web-based canggih untuk fine-tuning Large Language Models (LLM) menggunakan berbagai metode parameter-efficient fine-tuning (PEFT) state-of-the-art termasuk **QLoRA, DoRA, LoRA+, IA³, VeRA, AdaLoRA, dan OFT**. Menyediakan antarmuka yang user-friendly untuk melakukan fine-tuning model AI secara efisien dengan teknik kuantisasi 4-bit dan monitoring real-time.
+Platform web-based canggih **TechnoFriendR** untuk fine-tuning Large Language Models (LLM) menggunakan berbagai metode parameter-efficient fine-tuning (PEFT) state-of-the-art termasuk **QLoRA, DoRA, LoRA+, IA³, VeRA, AdaLoRA, dan OFT**. Menyediakan antarmuka yang user-friendly untuk melakukan fine-tuning model AI secara efisien dengan teknik kuantisasi 4-bit dan monitoring real-time.
 
 ## Fitur Utama
 
@@ -11,6 +11,9 @@ Platform web-based canggih untuk fine-tuning Large Language Models (LLM) menggun
 - **HuggingFace Streaming**: Load model langsung dari HuggingFace tanpa download lokal
 - **Model Search**: Cari dan pilih model langsung dari HuggingFace Hub
 - **Download Results**: Unduh hasil fine-tuning sebagai ZIP file (10-100MB)
+- **Model Management**: Merge LoRA adapters dengan base model untuk deployment
+- **Inference Testing**: Test merged models dengan customizable parameters
+- **Model Registry**: Centralized storage untuk merged models dengan metadata
 - Hugging Face integration dengan token authentication
 
 ### 2. **Advanced Dataset Management**
@@ -102,6 +105,120 @@ curl http://localhost:8000/api/training/methods
 # Get method recommendations
 curl http://localhost:8000/api/training/methods/dora/recommendations
 ```
+
+### 🎯 **Model Management**
+
+Platform menyediakan **end-to-end model management** dari training hingga deployment:
+
+#### **Model Merging**
+Merge LoRA adapters dengan base model untuk menciptakan model siap deployment:
+
+```bash
+# Merge model adapters
+curl -X POST http://localhost:8000/api/models/merge \
+  -F "base_model_id=meta-llama/Llama-2-7b-hf" \
+  -F "adapter_path=./models/job_123/adapters" \
+  -F "output_name=my-finetuned-model" \
+  -F "use_4bit=false"
+```
+
+**Features:**
+- **4-bit Quantization**: Opsi hemat memory untuk deployment
+- **Metadata Tracking**: Automatic tracking base model, merge time, size
+- **Conflict Prevention**: Mencegah overwrite model yang ada
+- **Security Validation**: Path validation untuk mencegah traversal attacks
+
+#### **Inference Testing**
+Test merged models dengan parameter yang dapat dikustomisasi:
+
+```bash
+# Run inference
+curl -X POST http://localhost:8000/api/models/inference \
+  -F "model_path=./models/merged/my-finetuned-model" \
+  -F "prompt=Hello, how are you?" \
+  -F "max_tokens=200" \
+  -F "temperature=0.7" \
+  -F "top_p=0.9" \
+  -F "do_sample=true"
+```
+
+**Response:**
+```json
+{
+  "prompt": "Hello, how are you?",
+  "response": "I'm doing well, thank you for asking!",
+  "parameters": {
+    "max_tokens": 200,
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "do_sample": true
+  }
+}
+```
+
+#### **Model Registry**
+Centralized storage untuk semua merged models:
+
+```bash
+# List all merged models
+curl http://localhost:8000/api/models/merged
+
+# Response
+{
+  "models": [
+    {
+      "name": "my-finetuned-model",
+      "path": "./models/merged/my-finetuned-model",
+      "metadata": {
+        "base_model_id": "meta-llama/Llama-2-7b-hf",
+        "merged_at": "2024-03-19T12:00:00Z",
+        "use_4bit": false,
+        "model_size": 1342177280
+      },
+      "size_mb": 1280.0,
+      "created_at": "2024-03-19T12:00:00Z"
+    }
+  ]
+}
+```
+
+#### **Model Operations**
+```bash
+# Delete merged model
+curl -X DELETE http://localhost:8000/api/models/merged/my-finetuned-model
+
+# Response
+{
+  "message": "Model my-finetuned-model deleted successfully"
+}
+```
+
+#### **Web Interface**
+Access model management melalui web interface:
+
+1. **Navigate**: `/models/manage`
+2. **Merge Model**: Pilih completed training job dan base model
+3. **Configure**: Set output name dan quantization options
+4. **Test Model**: Click "Test" pada model card
+5. **Generate**: Masukkan prompt dan parameter inference
+6. **Manage**: Search, filter, atau hapus models
+
+#### **Best Practices**
+
+**Memory Management:**
+- Gunakan 4-bit quantization untuk resource-limited environments
+- Monitor GPU usage saat inference
+- Cleanup unused models untuk hemat storage
+
+**Model Naming:**
+- Gunakan descriptive names: `domain-model-v1`
+- Include version numbers untuk tracking
+- Avoid special characters dan spaces
+
+**Security:**
+- Validasi input parameters sebelum merge
+- Use secure paths untuk model storage
+- Implement access control untuk model operations
 
 ### 7. **Security & Authentication**
 - JWT-based authentication dengan role-based access control
@@ -803,7 +920,7 @@ az containerapp dapr enable \
 
 **Langkah-langkah Fine-tuning:**
 
-1. **Buka Dashboard**: Akses `http://localhost` di browser
+1. **Buka Dashboard**: Akses `http://localhost` di browser untuk TechnoFriendR
 2. **Upload Dataset**:
    - Format yang didukung: JSON, JSONL, CSV, TXT, Parquet, XLSX
    - Struktur data untuk JSON:
@@ -831,6 +948,9 @@ az containerapp dapr enable \
 6. **Start Training**: Monitor progress real-time di dashboard
 7. **Evaluasi**: Review metrics (BERTScore, ROUGE, BLEU, Perplexity)
 8. **Download Model**: Export adapter untuk deployment
+9. **Model Management**: Navigate ke `/models/manage` untuk merge dan testing
+10. **Merge Adapters**: Pilih completed job dan merge dengan base model
+11. **Test Model**: Run inference dengan parameter yang dapat dikustomisasi
 
 #### 2. Via API (Programmatic)
 
@@ -944,6 +1064,12 @@ training_config = {
 - `GET /api/models/{id}` - Get model details
 - `POST /api/models/load` - Load model ke GPU
 - `GET /api/huggingface/models` - Search models dari HuggingFace Hub
+
+### Model Management
+- `POST /api/models/merge` - Merge LoRA adapters dengan base model
+- `POST /api/models/inference` - Run inference dengan merged model
+- `GET /api/models/merged` - List semua merged models
+- `DELETE /api/models/merged/{model_name}` - Delete merged model
 
 ### Training Methods
 - `GET /api/training/methods` - List available training methods dengan metadata

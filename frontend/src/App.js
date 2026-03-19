@@ -8,6 +8,7 @@ import TrainingConfiguration from './pages/TrainingConfiguration';
 import TrainingMonitor from './pages/TrainingMonitor';
 import CheckpointManager from './pages/CheckpointManager';
 import Evaluation from './pages/Evaluation';
+import ModelManagement from './pages/ModelManagement';
 import './App.css';
 
 function App() {
@@ -23,6 +24,7 @@ function App() {
           <Route path="training/monitor/:jobId" element={<TrainingMonitor />} />
           <Route path="checkpoints" element={<CheckpointManager />} />
           <Route path="evaluation" element={<Evaluation />} />
+          <Route path="models/manage" element={<ModelManagement />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

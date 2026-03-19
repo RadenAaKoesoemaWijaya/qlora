@@ -632,49 +632,278 @@ async def search_huggingface_models(
         logger.error(f"Error fetching HF models: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Dashboard Stats - Optimized dengan aggregation
-@api_router.get("/dashboard/stats")
-async def get_dashboard_stats():
-    """Get dashboard statistics dengan optimized aggregation"""
-    # Single aggregation query untuk semua job stats (lebih efisien)
-    job_stats = await db.training_jobs.aggregate([
-        {
-            "$group": {
-                "_id": None,
-                "total": {"$sum": 1},
-                "active": {"$sum": {"$cond": [{"$eq": ["$status", "training"]}, 1, 0]}},
-                "completed": {"$sum": {"$cond": [{"$eq": ["$status", "completed"]}, 1, 0]}},
-                "failed": {"$sum": {"$cond": [{"$eq": ["$status", "failed"]}, 1, 0]}},
-                "queued": {"$sum": {"$cond": [{"$eq": ["$status", "initializing"]}, 1, 0]}}
+# Model Management API
+@api_router.post("/models/merge")
+async def merge_model_adapters(
+    base_model_id: str = Form(...),
+    adapter_path: str = Form(...),
+    output_name: str = Form(...),
+    use_4bit: bool = Form(False)
+):
+    """Merge LoRA adapters dengan base model"""
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from peft import PeftModel
+        import os
+        from pathlib import Path
+        
+        # Validate inputs
+        if not base_model_id or not adapter_path or not output_name:
+            raise HTTPException(status_code=400, detail="Missing required parameters")
+        
+        # Security: Validate adapter path
+        adapter_full_path = Path(adapter_path).resolve()
+        if not str(adapter_full_path).startswith(str(ROOT_DIR)):
+            raise HTTPException(status_code=400, detail="Invalid adapter path")
+        
+        if not adapter_full_path.exists():
+            raise HTTPException(status_code=404, detail="Adapter path not found")
+        
+        # Create output directory
+        models_dir = ROOT_DIR / "models" / "merged"
+        models_dir.mkdir(parents=True, exist_ok=True)
+        output_path = models_dir / output_name
+        
+        # Prevent overwriting existing model
+        if output_path.exists():
+            raise HTTPException(status_code=409, detail="Model with this name already exists")
+        
+        logger.info(f"Starting model merge: {base_model_id} + {adapter_path} -> {output_path}")
+        
+        # Load base model
+        base_model_kwargs = {
+            "device_map": "auto",
+            "torch_dtype": torch.float16,
+            "trust_remote_code": True
+        }
+        
+        if use_4bit:
+            base_model_kwargs.update({
+                "load_in_4bit": True,
+                "device_map": "auto"
+            })
+        
+        base_model = AutoModelForCausalLM.from_pretrained(
+            base_model_id,
+            **base_model_kwargs
+        )
+        
+        # Load adapters
+        model = PeftModel.from_pretrained(base_model, str(adapter_full_path))
+        
+        # Merge and save
+        logger.info("Merging adapters...")
+        merged_model = model.merge_and_unload()
+        
+        # Save merged model
+        logger.info(f"Saving merged model to {output_path}")
+        merged_model.save_pretrained(str(output_path), safe_serialization=True)
+        
+        # Save tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(base_model_id)
+        tokenizer.save_pretrained(str(output_path))
+        
+        # Save metadata
+        from datetime import datetime
+        import json
+        metadata = {
+            "base_model_id": base_model_id,
+            "adapter_path": str(adapter_full_path),
+            "merged_at": str(datetime.utcnow()),
+            "use_4bit": use_4bit,
+            "model_size": sum(f.stat().st_size for f in output_path.rglob("*") if f.is_file())
+        }
+        
+        with open(output_path / "merge_metadata.json", "w") as f:
+            json.dump(metadata, f, indent=2)
+        
+        logger.info(f"Model merge completed successfully: {output_path}")
+        
+        return {
+            "message": "Model merged successfully",
+            "merged_model_path": str(output_path),
+            "metadata": metadata
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error merging model: {e}")
+        # Cleanup on failure
+        if 'output_path' in locals() and output_path.exists():
+            import shutil
+            shutil.rmtree(output_path, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"Failed to merge model: {str(e)}")
+
+@api_router.post("/models/inference")
+async def run_inference(
+    model_path: str = Form(...),
+    prompt: str = Form(...),
+    max_tokens: int = Form(200),
+    temperature: float = Form(0.7),
+    top_p: float = Form(0.9),
+    do_sample: bool = Form(True)
+):
+    """Run inference dengan merged model"""
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from pathlib import Path
+        
+        # Validate inputs
+        if not model_path or not prompt:
+            raise HTTPException(status_code=400, detail="Missing required parameters")
+        
+        # Security: Validate model path
+        model_full_path = Path(model_path).resolve()
+        if not str(model_full_path).startswith(str(ROOT_DIR)):
+            raise HTTPException(status_code=400, detail="Invalid model path")
+        
+        if not model_full_path.exists():
+            raise HTTPException(status_code=404, detail="Model path not found")
+        
+        logger.info(f"Loading model for inference: {model_path}")
+        
+        # Load model and tokenizer
+        model = AutoModelForCausalLM.from_pretrained(
+            str(model_full_path),
+            device_map="auto",
+            torch_dtype=torch.float16,
+            trust_remote_code=True
+        )
+        
+        tokenizer = AutoTokenizer.from_pretrained(str(model_full_path))
+        
+        # Set padding token
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        
+        # Prepare input
+        inputs = tokenizer(
+            prompt,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=512
+        )
+        
+        # Generate response
+        logger.info(f"Generating response for prompt: {prompt[:100]}...")
+        
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                do_sample=do_sample,
+                pad_token_id=tokenizer.eos_token_id,
+                eos_token_id=tokenizer.eos_token_id
+            )
+        
+        # Decode response
+        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        # Remove prompt from response
+        if response.startswith(prompt):
+            response = response[len(prompt):].strip()
+        
+        logger.info(f"Inference completed successfully")
+        
+        return {
+            "prompt": prompt,
+            "response": response,
+            "parameters": {
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "top_p": top_p,
+                "do_sample": do_sample
             }
         }
-    ]).to_list(1)
-    
-    # Parallel queries untuk collections lain
-    datasets_count, checkpoints_count = await asyncio.gather(
-        db.datasets.count_documents({}),
-        db.checkpoints.count_documents({})
-    )
-    
-    # Extract stats dari aggregation result
-    stats = job_stats[0] if job_stats else {
-        "total": 0, "active": 0, "completed": 0, "failed": 0, "queued": 0
-    }
-    
-    return {
-        "total_training_jobs": stats.get("total", 0),
-        "active_training_jobs": stats.get("active", 0),
-        "completed_training_jobs": stats.get("completed", 0),
-        "failed_training_jobs": stats.get("failed", 0),
-        "queued_training_jobs": stats.get("queued", 0),
-        "total_datasets": datasets_count,
-        "total_checkpoints": checkpoints_count
-    }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error running inference: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to run inference: {str(e)}")
 
-# Training Methods API
-@api_router.get("/training/methods")
-async def get_training_methods():
-    """Get available training methods dengan metadata"""
+@api_router.get("/models/merged")
+async def list_merged_models():
+    """List semua merged models"""
+    try:
+        from pathlib import Path
+        import json
+        
+        models_dir = ROOT_DIR / "models" / "merged"
+        if not models_dir.exists():
+            return {"models": []}
+        
+        models = []
+        for model_dir in models_dir.iterdir():
+            if model_dir.is_dir():
+                metadata_file = model_dir / "merge_metadata.json"
+                metadata = {}
+                
+                if metadata_file.exists():
+                    try:
+                        with open(metadata_file, 'r') as f:
+                            metadata = json.load(f)
+                    except:
+                        pass
+                
+                # Calculate model size
+                model_size = sum(f.stat().st_size for f in model_dir.rglob("*") if f.is_file())
+                
+                models.append({
+                    "name": model_dir.name,
+                    "path": str(model_dir),
+                    "metadata": metadata,
+                    "size_bytes": model_size,
+                    "size_mb": round(model_size / (1024 * 1024), 2),
+                    "created_at": metadata.get("merged_at", model_dir.stat().st_ctime)
+                })
+        
+        # Sort by creation time (newest first)
+        models.sort(key=lambda x: x["created_at"], reverse=True)
+        
+        return {"models": models}
+        
+    except Exception as e:
+        logger.error(f"Error listing merged models: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list models: {str(e)}")
+
+@api_router.delete("/models/merged/{model_name}")
+async def delete_merged_model(model_name: str):
+    """Delete merged model"""
+    try:
+        from pathlib import Path
+        import shutil
+        
+        model_path = ROOT_DIR / "models" / "merged" / model_name
+        
+        # Security: Validate path
+        model_full_path = model_path.resolve()
+        if not str(model_full_path).startswith(str(ROOT_DIR / "models" / "merged")):
+            raise HTTPException(status_code=400, detail="Invalid model name")
+        
+        if not model_full_path.exists():
+            raise HTTPException(status_code=404, detail="Model not found")
+        
+        # Delete model directory
+        shutil.rmtree(model_full_path)
+        
+        logger.info(f"Deleted merged model: {model_name}")
+        
+        return {"message": f"Model {model_name} deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting model: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete model: {str(e)}")
+
+# Dashboard Stats - Optimized dengan aggregation
     try:
         from core.training_engine_factory import TrainingEngineFactory
         methods = TrainingEngineFactory.get_available_methods()

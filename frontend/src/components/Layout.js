@@ -9,7 +9,8 @@ import {
   Save, 
   BarChart3,
   Menu,
-  X
+  X,
+  Cpu
 } from 'lucide-react';
 
 const Layout = () => {
@@ -19,6 +20,7 @@ const Layout = () => {
   const navigation = [
     { name: 'Dashboard', href: '/', icon: LayoutDashboard },
     { name: 'Models', href: '/models', icon: Brain },
+    { name: 'Model Management', href: '/models/manage', icon: Cpu },
     { name: 'Datasets', href: '/datasets', icon: Database },
     { name: 'Configure Training', href: '/training/configure', icon: Settings },
     { name: 'Training Monitor', href: '/training/monitor', icon: Activity },
@@ -42,8 +44,8 @@ const Layout = () => {
                 <Brain className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h1 className="text-white font-bold text-lg">MedLLM</h1>
-                <p className="text-indigo-300 text-xs">Fine-tuning Studio</p>
+                <h1 className="text-white font-bold text-lg">TechnoFriendR</h1>
+                <p className="text-indigo-300 text-xs">AI Fine-tuning Platform</p>
               </div>
             </div>
           </div>
@@ -76,8 +78,8 @@ const Layout = () => {
           {/* Footer */}
           <div className="p-4 border-t border-indigo-900">
             <div className="bg-indigo-900 rounded-lg p-3">
-              <p className="text-xs text-indigo-300 mb-1">Medical AI System</p>
-              <p className="text-xs text-indigo-400">QLoRA Fine-tuning v1.0</p>
+              <p className="text-xs text-indigo-300 mb-1">AI Fine-tuning Platform</p>
+              <p className="text-xs text-indigo-400"> 2026 PT. ASMER SAHABAT SUKSES</p>
             </div>
           </div>
         </div>
@@ -101,11 +103,11 @@ const Layout = () => {
 
           <div className="flex items-center space-x-4">
             <div className="text-right">
-              <p className="text-sm font-medium text-slate-900">Medical Research Team</p>
-              <p className="text-xs text-slate-500">Clinical Decision Support</p>
+              <p className="text-sm font-medium text-slate-900">TechnoFriendR Team</p>
+              <p className="text-xs text-slate-500">AI Fine-tuning Solutions</p>
             </div>
-            <div className="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center">
-              <span className="text-indigo-900 font-semibold text-sm">MR</span>
+            <div className="w-10 h-10 bg-sky-500 rounded-full flex items-center justify-center">
+              <span className="text-white font-semibold text-sm">TF</span>
             </div>
           </div>
         </div>
