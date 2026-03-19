@@ -5,9 +5,12 @@ Platform web-based canggih untuk fine-tuning Large Language Models (LLM) menggun
 ## Fitur Utama
 
 ### 1. **Model Selection & Management**
-- Pilihan model pre-trained: Llama 2, Llama 3, Mistral, Gemma, Mixtral
+- Pilihan model pre-trained: Llama 2, Llama 3, Mistral, Gemma, Mixtral, Phi-4, Qwen2.5, Gemma-2
 - Informasi detail tentang ukuran model dan karakteristik
 - Support untuk model 7B hingga 47B parameters
+- **HuggingFace Streaming**: Load model langsung dari HuggingFace tanpa download lokal
+- **Model Search**: Cari dan pilih model langsung dari HuggingFace Hub
+- **Download Results**: Unduh hasil fine-tuning sebagai ZIP file (10-100MB)
 - Hugging Face integration dengan token authentication
 
 ### 2. **Advanced Dataset Management**
@@ -46,10 +49,14 @@ Platform web-based canggih untuk fine-tuning Large Language Models (LLM) menggun
 - **Multi-GPU Support**: Distribusi training di multiple GPU
 - **Error Recovery**: Automatic retry dan rollback mechanisms
 - **Memory Optimization**: 4-bit quantization untuk efisiensi memory
+- **HuggingFace Streaming**: Load model langsung dari HuggingFace tanpa cache lokal
+- **Download Management**: Unduh hasil fine-tuning sebagai ZIP file
+- **Cache Control**: Opsional cleanup cache setelah training
 
-### 🎯 **Multiple Fine-Tuning Methods**
+### 🚀 **HuggingFace Integration**
 
-Platform ini sekarang mendukung **7 metode fine-tuning state-of-the-art**:
+#### Streaming Model Loading
+Platform sekarang mendukung **streaming langsung** dari HuggingFace Hub:
 
 | Method | Efficiency | Performance | Best For |
 |--------|-----------|-------------|----------|
@@ -484,6 +491,11 @@ ENABLE_GPU_MONITORING=true
 # ML Platform Integration
 WANDB_API_KEY=your-wandb-api-key
 HUGGINGFACE_TOKEN=your-huggingface-token
+
+# HuggingFace Configuration (NEW)
+HF_TOKEN=your_huggingface_token_here  # Untuk model gated (Llama, dll)
+HF_CACHE_DIR=/tmp/hf_cache  # atau kosongkan untuk ephemeral
+TRANSFORMERS_OFFLINE=0  # 0 = online, 1 = offline only
 ```
 
 ## ☁️ Azure Cloud Deployment
@@ -931,6 +943,7 @@ training_config = {
 - `GET /api/models` - List available models
 - `GET /api/models/{id}` - Get model details
 - `POST /api/models/load` - Load model ke GPU
+- `GET /api/huggingface/models` - Search models dari HuggingFace Hub
 
 ### Training Methods
 - `GET /api/training/methods` - List available training methods dengan metadata

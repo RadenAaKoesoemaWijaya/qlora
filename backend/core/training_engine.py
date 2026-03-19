@@ -14,6 +14,7 @@ import logging
 from typing import Dict, Any, Optional
 from pathlib import Path
 import json
+import os
 
 from .enhanced_logging_system import EnhancedLoggingSystem, LogCategory, LogContext
 
@@ -90,11 +91,24 @@ class QLoRATrainingEngine:
             # Setup quantization
             bnb_config = self.setup_quantization_config()
             
+            # Konfigurasi cache directory untuk HuggingFace
+            cache_dir = self.config.get("cache_dir", None)  # None = gunakan HF cache default
+            local_files_only = self.config.get("local_files_only", False)  # Default streaming dari HF
+            
+            self.structured_logger.log(
+                level="INFO",
+                category=LogCategory.TRAINING,
+                message=f"Cache dir: {cache_dir or 'default'}, Local files only: {local_files_only}",
+                context=context
+            )
+            
             # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(
                 model_id,
                 trust_remote_code=True,
-                padding_side="right"
+                padding_side="right",
+                cache_dir=cache_dir,
+                local_files_only=local_files_only
             )
             
             # Add padding token jika belum ada
@@ -109,7 +123,9 @@ class QLoRATrainingEngine:
                 trust_remote_code=True,
                 torch_dtype=torch.bfloat16,
                 low_cpu_mem_usage=True,
-                attn_implementation="flash_attention_2"  # Optimasi memory
+                attn_implementation="flash_attention_2",  # Optimasi memory
+                cache_dir=cache_dir,
+                local_files_only=local_files_only
             )
             
             # Enable gradient checkpointing untuk efisiensi memory
@@ -321,6 +337,35 @@ class QLoRATrainingEngine:
             "config": self.config,
             "trainable_parameters": self.model.get_nb_trainable_parameters() if hasattr(self.model, 'get_nb_trainable_parameters') else None
         }
+    
+    async def cleanup_cache(self):
+        """Bersihkan HuggingFace cache setelah training (opsional)"""
+        import shutil
+        cache_dir = self.config.get("cache_dir")
+        if cache_dir and os.path.exists(cache_dir):
+            try:
+                shutil.rmtree(cache_dir, ignore_errors=True)
+                self.structured_logger.log(
+                    level="INFO",
+                    category=LogCategory.TRAINING,
+                    message=f"Cache cleaned: {cache_dir}",
+                    context=LogContext(
+                        job_id=self.training_job_id,
+                        component="QLoRATrainingEngine",
+                        operation="cleanup_cache"
+                    )
+                )
+            except Exception as e:
+                self.structured_logger.log(
+                    level="WARNING",
+                    category=LogCategory.TRAINING,
+                    message=f"Failed to clean cache {cache_dir}: {str(e)}",
+                    context=LogContext(
+                        job_id=self.training_job_id,
+                        component="QLoRATrainingEngine",
+                        operation="cleanup_cache"
+                    )
+                )
 
 # Utility function untuk load model yang sudah difinetune
 def load_qlora_model(model_path: str, base_model_id: str) -> tuple:

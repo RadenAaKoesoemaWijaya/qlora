@@ -1,5 +1,6 @@
 from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Dict, Any
@@ -12,6 +13,8 @@ import json
 import asyncio
 import random
 import logging
+import zipfile
+import shutil
 
 try:
     from core.training_engine import QLoRATrainingEngine
@@ -560,6 +563,75 @@ async def get_evaluations():
     evals = await db.evaluations.find({}, {"_id": 0}).sort("evaluated_at", -1).to_list(50)
     return evals
 
+@api_router.get("/training/jobs/{job_id}/download")
+async def download_finetuned_model(job_id: str):
+    """Download hasil fine-tuning sebagai ZIP file"""
+    job = await db.training_jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Training job not found")
+    
+    if job.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Training not yet completed")
+    
+    model_path = job.get("model_path")
+    if not model_path or not os.path.exists(model_path):
+        raise HTTPException(status_code=404, detail="Model files not found")
+    
+    # Buat ZIP file
+    zip_path = f"/tmp/{job_id}_model.zip"
+    try:
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, dirs, files in os.walk(model_path):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, model_path)
+                    zipf.write(file_path, arcname)
+        
+        # Return file response
+        return FileResponse(
+            zip_path,
+            media_type="application/zip",
+            filename=f"finetuned_model_{job_id}.zip",
+            background=lambda: os.remove(zip_path) if os.path.exists(zip_path) else None
+        )
+    except Exception as e:
+        logger.error(f"Error creating zip file for job {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create download package: {str(e)}")
+
+@api_router.get("/huggingface/models")
+async def search_huggingface_models(
+    query: str = "",
+    limit: int = 20,
+    sort: str = "downloads"
+):
+    """Cari model dari HuggingFace Hub"""
+    try:
+        from huggingface_hub import HfApi
+        
+        api = HfApi()
+        models = api.list_models(
+            search=query,
+            sort=sort,
+            limit=limit,
+            filter="text-generation",  # Filter untuk LLM
+            library="transformers"
+        )
+        
+        return [
+            {
+                "id": model.modelId,
+                "name": model.modelId.split("/")[-1] if "/" in model.modelId else model.modelId,
+                "downloads": model.downloads,
+                "likes": model.likes,
+                "tags": model.tags,
+                "pipeline_tag": model.pipeline_tag
+            }
+            for model in models
+        ]
+    except Exception as e:
+        logger.error(f"Error fetching HF models: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Dashboard Stats - Optimized dengan aggregation
 @api_router.get("/dashboard/stats")
 async def get_dashboard_stats():
@@ -931,8 +1003,16 @@ async def run_real_training(job_id: str, config: TrainingConfig):
             "llama-3-8b": "meta-llama/Meta-Llama-3-8B",
             "mistral-7b": "mistralai/Mistral-7B-v0.3",
             "gemma-7b": "google/gemma-7b",
+            "phi-4": "microsoft/phi-4",
+            "qwen2.5-7b": "Qwen/Qwen2.5-7B-Instruct",
+            "llama-3.1-8b": "meta-llama/Llama-3.1-8B-Instruct",
+            "mixtral-8x7b": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+            "gemma-2-9b": "google/gemma-2-9b-it",
         }
+        # Jika model_id tidak ada di mapping, anggap itu langsung HuggingFace model ID
         real_model_id = MODEL_MAP.get(config.model_id, config.model_id)
+        
+        logger.info(f"Using model ID: {real_model_id} (mapped from {config.model_id})")
 
         # 3. Process Dataset (Blocking, run in thread)
         def process_data():

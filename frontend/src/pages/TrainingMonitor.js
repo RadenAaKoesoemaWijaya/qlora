@@ -21,7 +21,8 @@ import {
   Clock,
   Cpu,
   Play,
-  Pause
+  Pause,
+  Download
 } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -84,6 +85,34 @@ const TrainingMonitor = () => {
     } catch (error) {
       console.error('Failed to stop training:', error);
       alert('Failed to stop training');
+    }
+  };
+
+  const handleDownloadModel = async () => {
+    if (!job || job.status !== 'completed') {
+      alert('Model download is only available for completed training jobs');
+      return;
+    }
+
+    try {
+      const response = await axios.get(`${API}/training/jobs/${selectedJobId}/download`, {
+        responseType: 'blob'
+      });
+      
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `finetuned_model_${selectedJobId}.zip`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      
+      alert('Model downloaded successfully!');
+    } catch (error) {
+      console.error('Failed to download model:', error);
+      alert('Failed to download model. Please try again.');
     }
   };
 
@@ -154,16 +183,28 @@ const TrainingMonitor = () => {
           <h1 className="text-3xl font-bold text-slate-900">Training Monitor</h1>
           <p className="text-slate-600 mt-1">Real-time monitoring of fine-tuning progress</p>
         </div>
-        {job && (job.status === 'training' || job.status === 'initializing') && (
-          <button
-            data-testid="stop-training-button"
-            onClick={handleStopTraining}
-            className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors flex items-center space-x-2"
-          >
-            <StopCircle className="h-5 w-5" />
-            <span>Stop Training</span>
-          </button>
-        )}
+        <div className="flex items-center space-x-3">
+          {job && job.status === 'completed' && (
+            <button
+              data-testid="download-model-button"
+              onClick={handleDownloadModel}
+              className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors flex items-center space-x-2"
+            >
+              <Download className="h-5 w-5" />
+              <span>Download Model</span>
+            </button>
+          )}
+          {job && (job.status === 'training' || job.status === 'initializing') && (
+            <button
+              data-testid="stop-training-button"
+              onClick={handleStopTraining}
+              className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors flex items-center space-x-2"
+            >
+              <StopCircle className="h-5 w-5" />
+              <span>Stop Training</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Job Selector */}
